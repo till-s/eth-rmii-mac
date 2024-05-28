@@ -63,7 +63,7 @@ architecture rtl of RMIIMacTx is
       presc     => (others => '1'),
       phase     => (others => '0'),
       txEn      => '0',
-      crc       => (others => '1'),
+      crc       => ETH_CRC_INIT_LE_C,
       boffRand  => (others => '0'),
       boffMsk   => (others => '0'),
       lstColl   => '0',
@@ -109,10 +109,6 @@ begin
             rmiiDatMux(0) := '1';
             -- SOF bit is '1' during the last cycle 
             rmiiDatMux(1) := r.timer(r.timer'left);
-            -- latch CRC;  input value could change
-            -- if we are padding and the next packet
-            -- is already ready and has a different crc mode...
-            v.appendCRC   := appendCRC;
 
          when PAD =>
             rmiiDatMux    := "00";
@@ -143,6 +139,10 @@ begin
                   -- is down to -1
                   v.timer := toTimer( 7*4 );
                   v.txEn  := '1';
+                  -- latch CRC;  input value could change
+                  -- if we are padding and the next packet
+                  -- is already ready and has a different crc mode...
+                  v.appendCRC   := appendCRC;
                end if;
                v.crc := ETH_CRC_INIT_LE_C;
 

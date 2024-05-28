@@ -37,9 +37,6 @@ architecture sim of RMIIMacTxTb is
 
    constant EXP_NUM_PKTS_C : natural := 2;
 
-   constant CRC_CHECK_C : std_logic_vector(31 downto 0) := x"debb20e3";
-
-
    constant txVec    : Slv10Array := (
       -- padded packet
       "00" & x"ff",

@@ -2,6 +2,8 @@ library ieee;
 use     ieee.std_logic_1164.all;
 use     ieee.numeric_std.all;
 
+use     work.RMIIMacPkg.all;
+
 entity RMIIMacTx is
    port (
       clk        : in  std_logic;
@@ -27,14 +29,6 @@ end entity RMIIMacTx;
 
 architecture rtl of RMIIMacTx is
 
-   constant SLOT_BIT_TIME_C       : natural := 512;
-   constant LD_SLOT_BIT_TIME_C    : natural := 9;
-   constant IPG_BIT_TIME_C        : natural := 96;
-   constant LD_MAX_BACKOFF_C      : natural := 10;
-   constant LD_RMII_BITS_C        : natural := 1;
-   constant RMII_BITS_C           : natural := 2;
-
-   -- sign bit
    subtype TimerType is signed(LD_SLOT_BIT_TIME_C + LD_MAX_BACKOFF_C - LD_RMII_BITS_C downto 0);
    subtype BoffType  is unsigned(LD_MAX_BACKOFF_C - 1 downto 0);
 
@@ -42,35 +36,11 @@ architecture rtl of RMIIMacTx is
 
    constant TIMER_OFF_C           : TimerType := (others => '1');
 
-   constant ETH_POLY_LE_C         : std_logic_vector(31 downto 0) := x"EDB88320";
-   constant ETH_CHECK_LE_C        : std_logic_vector(31 downto 0) := x"2144DF1C";
-
    function toTimer(constant x : in integer)
    return TimerType is
    begin
       return to_signed( x - 2, TimerType'length );
    end function toTimer;
-
-   function crc32LE(
-      constant c : in std_logic_vector(31 downto 0);
-      constant x : in std_logic_vector(1 downto 0)
-   )
-   return std_logic_vector is
-      variable v : std_logic_vector(31 downto 0);
-      variable s : boolean;
-   begin
-      v          := (others => '0');
-      v(x'range) := (x xor c(x'range));
-      for i in 1 to 2 loop
-         s := (v(0) = '1');
-         v := '0' & v(v'left downto 1);
-         if ( s ) then
-            v := v xor ETH_POLY_LE_C;
-         end if;
-      end loop;
-      v := v xor ("00" & c(c'left downto 2));
-      return v;
-   end function crc32LE;
 
    type StateType is (IDLE, PREAMBLE, SEND, PAD, CRC);
 
@@ -132,7 +102,7 @@ begin
          crcDatMux := "00";
       end if;
 
-      crcNext := crc32LE( r.crc, crcDatMux );
+      crcNext := crc32LE2Bit( r.crc, crcDatMux );
 
       case ( r.state ) is
          when PREAMBLE =>
@@ -174,7 +144,7 @@ begin
                   v.timer := toTimer( 7*4 );
                   v.txEn  := '1';
                end if;
-               v.crc := (others => '1');
+               v.crc := ETH_CRC_INIT_LE_C;
 
             when PREAMBLE =>
                if ( r.timer < 0 ) then

@@ -13,6 +13,8 @@ VPATH=../hdl
 
 RMIIMacTxTb.o: RMIIMacTx.o
 
+RMIIMacTx.o: RMIIMacPkg.o
+
 clean:
 	$(RM) *.o $(TESTS) work-obj*.cf
 

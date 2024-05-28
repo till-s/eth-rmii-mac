@@ -48,16 +48,19 @@ architecture rtl of RMIIMacTx is
    function toTimer(constant x : in integer)
    return TimerType is
    begin
-      return to_signed( x - 1, TimerType'length );
+      return to_signed( x - 2, TimerType'length );
    end function toTimer;
 
-   function crc32LE(constant x : in std_logic_vector(1 downto 0))
+   function crc32LE(
+      constant c : in std_logic_vector(31 downto 0);
+      constant x : in std_logic_vector(1 downto 0)
+   )
    return std_logic_vector is
       variable v : std_logic_vector(31 downto 0);
       variable s : boolean;
    begin
       v          := (others => '0');
-      v(x'range) := x;
+      v(x'range) := (x xor c(x'range));
       for i in 1 to 2 loop
          s := (v(0) = '1');
          v := '0' & v(v'left downto 1);
@@ -65,6 +68,7 @@ architecture rtl of RMIIMacTx is
             v := v xor ETH_POLY_LE_C;
          end if;
       end loop;
+      v := v xor ("00" & c(c'left downto 2));
       return v;
    end function crc32LE;
 
@@ -80,6 +84,7 @@ architecture rtl of RMIIMacTx is
       boffRand  : BoffType;
       boffMsk   : BoffType;
       lstColl   : std_logic;
+      appendCRC : std_logic;
    end record RegType;
 
    constant REG_INIT_C : RegType := (
@@ -91,7 +96,8 @@ architecture rtl of RMIIMacTx is
       crc       => (others => '1'),
       boffRand  => (others => '0'),
       boffMsk   => (others => '0'),
-      lstColl   => '0'
+      lstColl   => '0',
+      appendCRC => '0'
    );
 
    signal r     : RegType := REG_INIT_C;
@@ -122,14 +128,21 @@ begin
       else
          crcDatMux := txDat(7 downto 6);
       end if;
+      if ( r.state = PAD ) then
+         crcDatMux := "00";
+      end if;
 
-      crcNext := crc32LE( r.crc(1 downto 0) xor crcDatMux );
+      crcNext := crc32LE( r.crc, crcDatMux );
 
       case ( r.state ) is
          when PREAMBLE =>
             rmiiDatMux(0) := '1';
             -- SOF bit is '1' during the last cycle 
             rmiiDatMux(1) := r.timer(r.timer'left);
+            -- latch CRC;  input value could change
+            -- if we are padding and the next packet
+            -- is already ready and has a different crc mode...
+            v.appendCRC   := appendCRC;
 
          when PAD =>
             rmiiDatMux    := "00";
@@ -158,7 +171,7 @@ begin
                   -- use timer to count preamble pairs
                   -- last pair is emitted when the counter
                   -- is down to -1
-                  v.timer := toTimer(7*4 - 1);
+                  v.timer := toTimer( 7*4 );
                   v.txEn  := '1';
                end if;
                v.crc := (others => '1');
@@ -166,7 +179,11 @@ begin
             when PREAMBLE =>
                if ( r.timer < 0 ) then
                   v.state := SEND;
-                  v.timer := toTimer( 64*4 );
+                  if ( r.appendCRC = '1' ) then
+                     v.timer := toTimer( (64 - 4)*4 );
+                  else
+                     v.timer := toTimer( 64*4 );
+                  end if;
                end if;
 
             when SEND | PAD =>
@@ -178,7 +195,7 @@ begin
                   end if;
                   if ( (txLst = '1' ) or (r.state = PAD) ) then
                      if ( r.timer < 0 ) then
-                        if ( appendCRC = '1' ) then
+                        if ( r.appendCRC = '1' ) then
                            v.state   := CRC;
                            v.timer   := toTimer( r.crc'length / RMII_BITS_C );
                         else
@@ -227,7 +244,8 @@ begin
          end if;
       end if;
 
-      rin <= v;
+      rmiiDat <= rmiiDatMux;
+      rin     <= v;
    end process P_COMB;
 
    P_SEQ : process ( clk ) is
@@ -240,6 +258,8 @@ begin
          end if;
       end if;
    end process P_SEQ;
+
+   rmiiTxEn <= r.txEn;
 
 end architecture rtl;
 

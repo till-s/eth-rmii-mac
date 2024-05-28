@@ -1,5 +1,5 @@
 
-TESTS=RMIIMacTxTb
+TESTS=RMIIMacTxTb RMIIMacRxTb
 
 tests: $(TESTS)
 
@@ -11,7 +11,8 @@ VPATH=../hdl
 %Tb: %Tb.o
 	ghdl -e -Wl,-no-pie -o $@  $@
 
-RMIIMacTxTb.o: RMIIMacTx.o RMIIMacRx.o
+RMIIMacTxTb.o: RMIIMacTx.o
+RMIIMacRxTb.o: RMIIMacRx.o RMIIMacPkg.o
 
 RMIIMacTx.o: RMIIMacPkg.o
 

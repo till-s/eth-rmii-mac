@@ -126,7 +126,12 @@ begin
                v.isBcst := r.isBcst and (rmiiDat = "11");
                v.isUcst := r.isUcst and (rmiiDat = r.delayReg(1 downto 0) );
                if ( r.cnt < 0 ) then
-                  if ( (promisc = '1') or r.isBcst or r.isUcst or ( mcFilter( to_integer( r.mcHash ) ) = '1' ) ) then
+                  if (   (promisc = '1')
+                       or r.isBcst
+                       or r.isUcst
+                       -- delayReg holds the multicast/broadcast bit
+                       or (not r.isBcst and ( (r.delayReg(0) and mcFilter( to_integer( r.mcHash )) ) = '1' ) )
+                     ) then
                      rxVld   <= '1';
                      v.state := RECEIVE;
                      v.cnt   := to_signed( 8/RMII_BITS_C - 2, r.cnt'length );
@@ -147,15 +152,17 @@ begin
                         -- OK
                         rxAbt   <= '0';
                         v.state := TAIL;
+                        -- least significant byte is being sent right now;
+                        -- 5 remain in the shift reg.
                         if ( r.stripCRC = '1' ) then
-                           v.cnt := to_signed( (r.delayReg'length - r.crc'length) / RMII_BITS_C - 2, r.cnt'length );
+                           v.cnt := to_signed( (r.delayReg'length - 8 - r.crc'length) / RMII_BITS_C - 2, r.cnt'length );
                         else
-                           v.cnt := to_signed( (r.delayReg'length) / RMII_BITS_C - 2, r.cnt'length );
+                           v.cnt := to_signed( (r.delayReg'length - 8) / RMII_BITS_C - 2, r.cnt'length );
                         end if;
+                     else
+                        v.state := DROP;
+                        -- rxAbt has been asserted above
                      end if;
-                  else
-                     v.state := DROP;
-                     -- rxAbt has been asserted above
                   end if;
                end if;
 

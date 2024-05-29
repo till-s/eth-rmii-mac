@@ -140,7 +140,7 @@ begin
                      v.state := RECEIVE;
                      v.cnt   := to_signed( 8/RMII_BITS_C - 2, r.cnt'length );
                   else
-                     rxAbt   <= '1';
+                     -- no need to raise rxAbt; nothing has made it out yet...
                      v.state := DROP;
                   end if;
                end if;

@@ -106,8 +106,12 @@ begin
                rxAbt <= '0';
 
                v.stripCRC := stripCRC;
-               if ( ( rmiiDV and rxRdy ) = '1' ) then
-                  v.state    := PREAMBLE;
+               if ( rmiiDV = '1' ) then
+                  if ( rxRdy = '1' ) then
+                     v.state    := PREAMBLE;
+                  else
+                     v.state    := DROP;
+                  end if;
                end if;
 
             when PREAMBLE =>

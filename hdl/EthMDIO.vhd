@@ -64,6 +64,8 @@ architecture rtl of EthMDIO is
       zreg           : std_logic;
       nbits          : CounterType;
       ack            : std_logic;
+      rdnwr          : std_logic;
+      hiz            : std_logic;
    end record RegType;
 
    constant REG_INIT_C : RegType := (
@@ -71,8 +73,10 @@ architecture rtl of EthMDIO is
       sreg           => (others => '1'),
       oreg           => '1',
       zreg           => '1',
-      nbits          => toCounter( 31 ), -- 1 cycle min. spent in IDLE
-      ack            => '0'
+      nbits          => toCounter( 32 ),
+      ack            => '0',
+      rdnwr          => '1',
+      hiz            => '1'
    );
 
    signal r          : RegType   := REG_INIT_C;
@@ -82,11 +86,13 @@ architecture rtl of EthMDIO is
    signal presc      : PrescType := PRESC_INIT_C;
    signal mclkRise   : std_logic;
    signal mclkFall   : std_logic;
+   signal errLoc     : std_logic;
 
 begin
 
-   P_COMB : process ( r, MDInp, req, rdnwr, devAddr, regAddr, wDat, mclkRise, mclkFall, hiz ) is
-      variable v : RegType;
+   P_COMB : process ( r, MDInp, req, rdnwr, devAddr, regAddr, wDat, mclkRise, mclkFall, hiz, errLoc ) is
+      variable v      : RegType;
+      variable newHiz : std_logic;
    begin
       v     := r;
 
@@ -100,7 +106,10 @@ begin
 
       -- reset ack; in back-to-back cycles ack is set during the
       -- first IDLE cycle
-      v.ack := '0';
+      v.ack   := '0';
+
+      -- combinatorial - unaffected by prescaler
+      newHiz  := r.rdnwr and (not r.nbits(4) or r.nbits(5));
 
       if ( mclkRise = '1' ) then
 
@@ -108,6 +117,8 @@ begin
          if ( r.nbits >= 0 ) then
             v.nbits := r.nbits - 1;
          end if;
+
+         v.hiz := '1';
 
          case ( r.state ) is 
 
@@ -118,24 +129,29 @@ begin
 
             when IDLE =>
                if ( req = '1' ) then
-                  v.sreg  := "01" & rdnwr & not rdnwr & devAddr & regAddr & rdnwr & rdnwr & wDat;
-                  v.nbits := toCounter( 32 );
+                  v.sreg  := "01" & rdnwr & not rdnwr & devAddr & regAddr & '1' & rdnwr & wDat;
+                  if ( rdnwr = '1' ) then
+                     -- for peace of mind
+                     v.sreg(15 downto 0) := (others => '1');
+                  end if;
+                  v.nbits := toCounter( 31 );
                   v.state := SHIFT;
+                  v.rdnwr := rdnwr;
                end if;
 
             when SHIFT =>
-               -- shift
                v.sreg := r.sreg(r.sreg'left - 1 downto 0) & (not hiz or MDInp);
+               v.hiz  := newHiz;
 
                if ( r.nbits < 0 ) then
                   v.ack := '1';
                   -- sreg(15) must be '0' if there is someone
                   -- responding to a read
-                  if ( NO_PREAMBLE_G and ( r.sreg(15) = '0' ) ) then
+                  if ( NO_PREAMBLE_G and ( errLoc = '0' ) ) then
                      v.state := IDLE;
                   else
                      v.state := PREAMBLE;
-                     v.nbits := toCounter( 31 );
+                     v.nbits := toCounter( 32 );
                   end if;
                end if;
 
@@ -144,9 +160,9 @@ begin
       end if;
 
       if ( r.state = SHIFT ) then
-         hiz   <= rdnwr and not r.nbits(4);
+         hiz   <= newHiz;
       else
-         hiz   <= '1';
+         hiz   <= r.hiz;
       end if;
 
       rin   <= v;
@@ -202,8 +218,9 @@ begin
 
    end generate G_WITH_PRESC;
 
-   ack  <= r.ack;
-   err  <= not (r.sreg(16)); -- read response should have pulled low
-   rDat <= r.sreg(15 downto 0);
+   ack     <= r.ack;
+   errLoc  <= r.sreg(16) and r.rdnwr; -- read response should have pulled low
+   err     <= errLoc;
+   rDat    <= r.sreg(15 downto 0);
 
 end architecture rtl;

@@ -1,5 +1,5 @@
 
-TESTS=RMIIMacTxTb RMIIMacRxTb
+TESTS=RMIIMacTxTb RMIIMacRxTb EthMDIOTb
 
 tests: $(TESTS)
 
@@ -18,6 +18,7 @@ RMIIMacTx.o: RMIIMacPkg.o
 
 RMIIMacRx.o: RMIIMacPkg.o
 
+EthMDIOTb.o: EthMDIO.o
+
 clean:
 	$(RM) *.o $(TESTS) work-obj*.cf
-

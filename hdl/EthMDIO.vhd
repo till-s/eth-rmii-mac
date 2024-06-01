@@ -92,7 +92,6 @@ begin
 
    P_COMB : process ( r, MDInp, req, rdnwr, devAddr, regAddr, wDat, mclkRise, mclkFall, hiz, errLoc ) is
       variable v      : RegType;
-      variable newHiz : std_logic;
    begin
       v     := r;
 
@@ -108,17 +107,12 @@ begin
       -- first IDLE cycle
       v.ack   := '0';
 
-      -- combinatorial - unaffected by prescaler
-      newHiz  := r.rdnwr and (not r.nbits(4) or r.nbits(5));
-
       if ( mclkRise = '1' ) then
 
          -- bit counter
          if ( r.nbits >= 0 ) then
             v.nbits := r.nbits - 1;
          end if;
-
-         v.hiz := '1';
 
          case ( r.state ) is 
 
@@ -130,21 +124,28 @@ begin
             when IDLE =>
                if ( req = '1' ) then
                   v.sreg  := "01" & rdnwr & not rdnwr & devAddr & regAddr & '1' & rdnwr & wDat;
+                  v.hiz   := '0';
                   if ( rdnwr = '1' ) then
                      -- for peace of mind
                      v.sreg(15 downto 0) := (others => '1');
                   end if;
-                  v.nbits := toCounter( 31 );
+                  v.nbits := toCounter( 32 );
                   v.state := SHIFT;
                   v.rdnwr := rdnwr;
                end if;
 
             when SHIFT =>
-               v.sreg := r.sreg(r.sreg'left - 1 downto 0) & (not hiz or MDInp);
-               v.hiz  := newHiz;
+               v.sreg := r.sreg(r.sreg'left - 1 downto 0) & MDInp; -- (not hiz or MDInp);
+               -- hiz is in bit # 17; since we register we must do it once
+               -- cycle earlier and finally subtract our offset against the bit
+               -- index
+               if ( r.rdnwr = '1' and r.nbits = 18 + 1 - 2 ) then
+                  v.hiz := '1';
+               end if;
 
                if ( r.nbits < 0 ) then
                   v.ack := '1';
+                  v.hiz := '1'; -- release if we were writing
                   -- sreg(15) must be '0' if there is someone
                   -- responding to a read
                   if ( NO_PREAMBLE_G and ( errLoc = '0' ) ) then
@@ -159,11 +160,7 @@ begin
 
       end if;
 
-      if ( r.state = SHIFT ) then
-         hiz   <= newHiz;
-      else
-         hiz   <= r.hiz;
-      end if;
+      hiz   <= r.hiz;
 
       rin   <= v;
    end process P_COMB;

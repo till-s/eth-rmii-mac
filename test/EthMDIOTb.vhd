@@ -22,7 +22,7 @@ architecture sim of EthMDIOTb is
    signal ack           : std_logic;
    -- no response from device
    signal err           : std_logic;
-   signal rdnwr         : std_logic := '0';
+   signal rdnwr         : std_logic := '1';
    signal devAddr       : std_logic_vector( 4 downto 0) := "10010";
    signal regAddr       : std_logic_vector( 4 downto 0) := "01011";
    signal wDat          : std_logic_vector(15 downto 0) := x"dead";

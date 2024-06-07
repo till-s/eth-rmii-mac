@@ -28,6 +28,8 @@ architecture sim of Usb2Ep0MDIOCtlTb is
    signal match          : boolean := true;
 
    signal tstReqVld      : std_logic_vector(0 to 3) := (others => '0');
+   signal tstReqMsk      : std_logic_vector(0 to 3) := (others => '1');
+   signal tstReqVldMskd  : std_logic_vector(0 to 3) := (others => '1');
    signal tstReqAck      : std_logic;
    signal tstReqErr      : std_logic;
    signal tstParamIb     : Usb2ByteArray(0 to 3);
@@ -40,23 +42,57 @@ architecture sim of Usb2Ep0MDIOCtlTb is
 
    signal rand           : natural := 0;
 
-   constant tstVec       : Usb2ByteArray := (
-      x"02",
-      x"03",
-      x"04",
-      x"05",
-      x"06",
-      x"07",
-      x"a2",
-      x"a3",
-      x"a4",
-      x"a5",
-      x"a6",
-      x"a7"
+   type Slv11Array is array (natural range <>) of std_logic_vector(10 downto 0);
+
+   constant tstVec       : Slv11Array := (
+      "100" & x"02",
+      "100" & x"03",
+      "100" & x"04",
+      "100" & x"05",
+      "100" & x"06",
+      "100" & x"07",
+      "100" & x"a2",
+      "100" & x"a3",
+      "100" & x"a4",
+      "100" & x"a5",
+      "100" & x"a6",
+      "101" & x"a7",
+      "110" & x"00",
+
+      "110" & x"00",
+
+      "100" & x"02",
+      "100" & x"03",
+      "100" & x"04",
+      "100" & x"05",
+      "100" & x"06",
+      "000" & x"00",
+      "000" & x"00",
+      "000" & x"00",
+      "100" & x"07",
+      "000" & x"00",
+      "100" & x"a2",
+      "100" & x"a3",
+      "100" & x"a4",
+      "100" & x"a5",
+      "100" & x"a6",
+      "101" & x"a7",
+      "000" & x"00",
+      "000" & x"00",
+      "110" & x"00"
    );
 
+   type Slv48Array is array (natural range <>) of EthMulticastFilterType;
+
    -- computed with python script
-   constant tstHashCmp  : EthMulticastFilterType := (14 => '1', 42 => '1', others => '0');
+   constant cmpVec      : Slv48Array := (
+     0 => (14 => '1', 42 => '1', others => '0'),
+     1 => (                      others => '0'),
+     2 => (14 => '1', 42 => '1', others => '0')
+   );
+
+   signal   tstVecIdx   : integer := 0;
+
    signal   mcFilter    : EthMulticastFilterType;
    signal   mcFilterUpd : std_logic;
 
@@ -64,7 +100,7 @@ begin
 
    process is
    begin
-      if ( ncycles > 3 and nreqs > 20 and nwrite > 4 and nstrm > 4 ) then
+      if ( ncycles > 3 and nreqs > 20 and nwrite > 4 and nstrm > 2*cmpVec'length ) then
          report "Test PASSED";
          wait;
       else
@@ -76,45 +112,62 @@ begin
    process (clk) is
       variable cmp : std_logic_vector(15 downto 0);
       variable val : unsigned(15 downto 0) := unsigned( regA );
-      variable idx : integer := 0;
    begin
       if ( rising_edge( clk ) ) then
          if ( ncycles > 1 ) then
             assert status = x"dead" report "status mismatch" severity failure;
          end if;
          rand <= rand + 1;
+         tstReqMsk <= (others => '1');
          if ( tstReqVld = "0000" ) then 
             if ( rand mod 13 = 0 ) then
-               tstReqVld(1)      <= '1';
-               simReqParam.value <= x"01" & x"10"; -- PHY_ID - REGISTER
+               tstReqVld(1)        <= '1';
+               simReqParam.value   <= x"01" & x"10"; -- PHY_ID - REGISTER
+               simReqParam.reqType <= USB2_REQ_TYP_TYPE_VENDOR_C;
             elsif ( rand mod 17 = 0 ) then
-               tstReqVld(1)      <= '1';
-               simReqParam.value <= x"01" & x"0A"; -- PHY_ID - REGISTER
+               tstReqVld(1)        <= '1';
+               simReqParam.value   <= x"01" & x"0A"; -- PHY_ID - REGISTER
+               simReqParam.reqType <= USB2_REQ_TYP_TYPE_VENDOR_C;
             elsif ( rand mod 11 = 0 ) then
-               tstReqVld(2)      <= '1';
-               simReqParam.value <= x"01" & x"0A"; -- PHY_ID - REGISTER
-               val               := val + x"0101";
-               tstParamOb(1)     <= std_logic_vector( val(15 downto 8) );
-               tstParamOb(0)     <= std_logic_vector( val( 7 downto 0) );
+               tstReqVld(2)        <= '1';
+               simReqParam.value   <= x"01" & x"0A"; -- PHY_ID - REGISTER
+               simReqParam.reqType <= USB2_REQ_TYP_TYPE_VENDOR_C;
+               val                 := val + x"0101";
+               tstParamOb(1)       <= std_logic_vector( val(15 downto 8) );
+               tstParamOb(0)       <= std_logic_vector( val( 7 downto 0) );
             elsif ( rand mod 7 = 0 ) then
-               tstReqVld(3)      <= '1';
+               tstReqVld(3)        <= '1';
                -- stream
-               tstParamOb(1)     <= x"00";
-               tstParamOb(USB2_EP_GENERIC_STRM_DAT_IDX_C) <= tstVec(0);
-               idx               := 1;
+               tstParamOb(1)       <= x"00";
+               simReqParam.reqType <= USB2_REQ_TYP_TYPE_CLASS_C;
+               tstParamOb(USB2_EP_GENERIC_STRM_DAT_IDX_C) <= tstVec(tstVecIdx)(7 downto 0);
+               tstParamOb(USB2_EP_GENERIC_STRM_LST_IDX_C)
+                         (USB2_EP_GENERIC_STRM_LST_BIT_C) <= tstVec(tstVecIdx)(8);
+               tstParamOb(USB2_EP_GENERIC_STRM_DON_IDX_C)
+                         (USB2_EP_GENERIC_STRM_DON_BIT_C) <= tstVec(tstVecIdx)(9);
+               tstReqMsk(3)                               <= tstVec(tstVecIdx)(10);
+               if ( tstVecIdx = tstVec'high ) then
+                  tstVecIdx <= 0;
+               else
+                  tstVecIdx <= tstVecIdx + 1; 
+               end if;
             end if;
          elsif ( tstReqVld(3) = '1' ) then
             -- stream
-            tstParamOb(USB2_EP_GENERIC_STRM_DAT_IDX_C) <= tstVec(idx);
-            if ( idx = tstVec'high ) then
-               tstParamOb(USB2_EP_GENERIC_STRM_LST_IDX_C)
-                         (USB2_EP_GENERIC_STRM_LST_BIT_C) <= '1';
-            else
-               idx := idx + 1; 
-            end if;
-            if ( tstParamOb(USB2_EP_GENERIC_STRM_LST_IDX_C)
-                         (USB2_EP_GENERIC_STRM_LST_BIT_C)  = '1' ) then
+            tstParamOb(USB2_EP_GENERIC_STRM_DAT_IDX_C) <= tstVec(tstVecIdx)(7 downto 0);
+            tstParamOb(USB2_EP_GENERIC_STRM_LST_IDX_C)
+                      (USB2_EP_GENERIC_STRM_LST_BIT_C) <= tstVec(tstVecIdx)(8);
+            tstParamOb(USB2_EP_GENERIC_STRM_DON_IDX_C)
+                      (USB2_EP_GENERIC_STRM_DON_BIT_C) <= tstVec(tstVecIdx)(9);
+            tstReqMsk(3)                               <= tstVec(tstVecIdx)(10);
+            if ( usb2EpGenericStrmDon( tstParamOb ) = '1' ) then
                tstReqVld(3) <= '0';
+            else
+               if ( tstVecIdx = tstVec'high ) then
+                  tstVecIdx <= 0;
+               else
+                  tstVecIdx <= tstVecIdx + 1; 
+               end if;
             end if;
          elsif ( tstReqAck = '1' ) then
             tstReqVld  <= (others => '0');
@@ -136,7 +189,7 @@ begin
             end if;
          end if;
          if ( mcFilterUpd = '1' ) then
-            assert mcFilter = tstHashCmp report "MC filter mismatch" severity failure;
+            assert mcFilter = cmpVec(nstrm mod cmpVec'length) report "MC filter mismatch" severity failure;
             nstrm <= nstrm + 1;
          end if;
       end if;
@@ -226,11 +279,13 @@ begin
          mcFilterUpd       => mcFilterUpd,
          -- full contents; above bits are for convenience
          statusRegPolled   => status,
-         dbgReqVld         => tstReqVld,
+         dbgReqVld         => tstReqVldMskd,
          dbgReqAck         => tstReqAck,
          dbgReqErr         => tstReqErr,
          dbgParamIb        => tstParamIb,
          dbgParamOb        => tstParamOb
       );
+
+   tstReqVldMskd <= (tstReqVld and tstReqMsk);
 
 end architecture sim;

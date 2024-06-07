@@ -56,7 +56,6 @@ end entity Usb2Ep0MDIOCtl;
 architecture rtl of Usb2Ep0MDIOCtl is
    constant USB2_REQ_VENDOR_GET_VERSION_C : Usb2CtlRequestCodeType := x"00";
    constant USB2_REQ_VENDOR_MDIO_C        : Usb2CtlRequestCodeType := x"01";
-   constant USB2_REQ_VENDOR_SET_MC_FILT_C : Usb2CtlRequestCodeType := x"02";
 
    constant PHY_STATUS_REG_C              : std_logic_vector(4 downto 0) := "10000";
 
@@ -81,7 +80,7 @@ architecture rtl of Usb2Ep0MDIOCtl is
    constant MC_REQ_C : Usb2EpGenericReqDefArray := (
       0 => usb2MkEpGenericReqDef(
          dev2Host => '0',
-         request  =>  USB2_REQ_VENDOR_SET_MC_FILT_C,
+         request  =>  USB2_REQ_CLS_CDC_SET_ETHERNET_MC_FILTERS_C,
          dataSize =>  0,
          stream   =>  true
       )
@@ -112,7 +111,7 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlwDat    : std_logic_vector(15 downto 0);
       poll       : integer range -1 to POLL_STATUS_PER_G - 2;
       pollVal    : std_logic_vector(15 downto 0);
-      mcLst      : std_logic;
+      mcDon      : std_logic;
       mcCnt      : McCntType;
       mcFilter   : EthMulticastFilterType;
       mcUpd      : std_logic;
@@ -127,7 +126,7 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlwDat    => (others => '1'),
       poll       => -1,
       pollVal    => (others => '0'),
-      mcLst      => '1',
+      mcDon      => '1',
       mcCnt      => (others => '0'),
       mcFilter   => MC_INIT_C,
       mcUpd      => '0'
@@ -150,6 +149,24 @@ architecture rtl of Usb2Ep0MDIOCtl is
    signal mcHash           : EthMulticastHashType := ETH_MULTICAST_HASH_INIT_C;
    signal mcHashIn         : EthMulticastHashType;
    signal mcHashCen        : std_logic;
+
+   function filter(
+      constant vld : std_logic_vector;
+      constant req : Usb2CtlReqParamType
+   ) return std_logic_vector is
+      constant Z_C : std_logic_vector(vld'range) := (others => '0');
+   begin
+      if ( ( (vld(0) or vld(1) or vld(2)) = '1' ) and ( req.reqType = USB2_REQ_TYP_TYPE_VENDOR_C ) ) then
+         return vld;
+      elsif ( SUPPORT_MC_FILT_G ) then
+         if ( ( vld(3) = '1' ) and ( req.reqType = USB2_REQ_TYP_TYPE_CLASS_C ) ) then
+            return vld;
+         end if;
+      end if;
+      return Z_C;
+   end function filter;
+
+   signal filteredReqLoc  : std_logic_vector(epReqVld'range);
 
 begin
 
@@ -248,20 +265,24 @@ begin
    end generate G_HASH;
 
    P_COMB : process ( r, usb2CtlReqParam, epReqVld, paramOb, ctlAck, ctlErr, ctlRDat, mcHash ) is
-      variable v : RegType;
+      variable v           : RegType;
+      variable filteredReq : std_logic_vector( epReqVld'range );
    begin
-      v        := r;
+      v            := r;
 
-      epReqAck  <= '1';
-      epReqErr  <= '1';
-      mcHashCen <= '0';
-      if ( ( r.mcLst = '1' ) or ( r.mcCnt < 0 ) ) then
+      epReqAck     <= '1';
+      epReqErr     <= '1';
+      mcHashCen    <= '0';
+
+      filteredReq := filter( epReqVld, usb2CtlReqParam );
+
+      if ( ( r.mcDon = '1' ) or ( r.mcCnt < 0 ) ) then
          mcHashIn  <= ETH_MULTICAST_HASH_INIT_C;
       else
          mcHashIn  <= mcHash;
       end if;
 
-      v.mcUpd  := '0';
+      v.mcUpd      := '0';
 
       paramIb                <= (others => (others => '0'));
       paramIb(0)             <= CMD_SET_VERSION_G( 7 downto  0);
@@ -269,34 +290,40 @@ begin
       paramIb(2)             <= CMD_SET_VERSION_G(23 downto 16);
       paramIb(3)             <= CMD_SET_VERSION_G(31 downto 24);
 
-      if ( epReqVld(1) = '1' ) then
+      if ( filteredReq(1) = '1' ) then
          paramIb(0)             <= ctlRDat( 7 downto 0);
          paramIb(1)             <= ctlRDat(15 downto 8);
       end if;
 
-      if ( SUPPORT_MC_FILT_G ) then
-         -- do this regardless of epReqVld; mops up the last stream byte
+      if ( filteredReq( 1 ) = '1' ) then
+         epReqAck                         <= '1';
+         epReqErr                         <= '0';
+      elsif ( SUPPORT_MC_FILT_G and ( filteredReq( 3 ) = '1' ) ) then
+         if ( r.mcDon = '1' ) then
+            -- new transfer has started (may even be an empty one)
+            -- clear the old list.
+            v.mcFilter := ETH_MULTICAST_FILTER_INIT_C;
+         end if;
+         -- do this regardless of 'don' or not; mops up the last stream byte
          if ( r.mcCnt < 0 ) then
             v.mcCnt                              := toMcCnt( 6 );
             v.mcFilter( to_integer( mcHash ) )   := '1';
-            v.mcUpd                              := r.mcLst;
          end if;
-      end if;
-
-      if    ( epReqVld( 0 ) = '1' ) then
-         epReqAck                         <= '1';
-         epReqErr                         <= '0';
-      elsif ( SUPPORT_MC_FILT_G and (epReqVld( 3 ) = '1') ) then
-         v.mcLst   := usb2EpGenericStrmLst( paramOb );
-         mcHashCen <= '1';
-         if ( r.mcLst = '1' ) then
-            -- new request; clear filters
-            v.mcFilter := ETH_MULTICAST_FILTER_INIT_C;
-         end if;
-         if ( ( r.mcLst = '1' ) or ( r.mcCnt < 0 ) ) then
-            v.mcCnt  := toMcCnt( 6 );
+         if ( usb2EpGenericStrmDon( paramOb ) = '1' ) then
+            -- xfer is over; data during this cycle are
+            -- not valid. This clause is reached even if
+            -- there are no data at all (flush of mc list)
+            v.mcDon    := '1';
+            v.mcUpd    := '1';
          else
-            v.mcCnt  := r.mcCnt - 1;
+            v.mcDon    := '0';
+            mcHashCen  <= '1';
+            -- make sure counter is initialized (if r.mcDon)
+            if ( ( r.mcDon = '1' ) or ( r.mcCnt < 0 ) ) then
+               v.mcCnt  := toMcCnt( 6 );
+            else
+               v.mcCnt  := r.mcCnt - 1;
+            end if;
          end if;
       end if;
 
@@ -304,14 +331,14 @@ begin
 
          when IDLE =>
 
-            if ( ( epReqVld( 1 ) or epReqVld(2) ) = '1'  ) then
+            if ( ( filteredReq( 1 ) or filteredReq(2) ) = '1' ) then
 
                epReqAck <= '0';
                epReqErr <= ctlErr;
 
                if ( r.ctlReq = '0' ) then
                   v.ctlReq     := '1';
-                  v.ctlRdnwr   := epReqVld(1); -- read
+                  v.ctlRdnwr   := filteredReq( 1 );
                   v.ctlDevAddr := usb2CtlReqParam.value(12 downto 8);
                   v.ctlRegAddr := usb2CtlReqParam.value( 4 downto 0);
                   v.ctlWDat    := paramOb(1) & paramOb(0);
@@ -337,7 +364,7 @@ begin
             end if;
 
          when BUSY | POLL =>
-            if ( ( epReqVld( 1 ) or epReqVld(2) ) = '1'  ) then
+            if ( ( filteredReq( 1 ) or filteredReq(2) ) = '1' ) then
                -- hold off new request
                epReqAck <= '0';
             end if;
@@ -359,6 +386,7 @@ begin
       end if;
 
       rin    <= v;
+filteredReqLoc <= filteredReq;
    end process P_COMB;
 
    P_SEQ : process ( usb2Clk ) is

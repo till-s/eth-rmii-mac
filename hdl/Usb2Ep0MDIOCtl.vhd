@@ -75,7 +75,8 @@ architecture rtl of Usb2Ep0MDIOCtl is
       usb2MkEpGeneriqReqDef(
          dev2Host => '0',
          request  =>  USB2_REQ_VENDOR_STRM_TST_C,
-         dataSize =>  8
+         dataSize =>  0,
+         stream   =>  true
       )
    );
 
@@ -89,7 +90,6 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlRegAddr : std_logic_vector(4 downto 0);
       ctlwDat    : std_logic_vector(15 downto 0);
       poll       : integer range -1 to POLL_STATUS_PER_G - 2;
-      tst        : unsigned(1 downto 0);
       pollVal    : std_logic_vector(15 downto 0);
    end record RegType;
 
@@ -101,7 +101,6 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlRegAddr => (others => '0'),
       ctlwDat    => (others => '1'),
       poll       => -1,
-      tst        => (others => '1'),
       pollVal    => (others => '0')
    );
 
@@ -223,13 +222,7 @@ begin
          epReqAck                         <= '1';
          epReqErr                         <= '0';
       elsif ( epReqVld( 3 ) = '1' ) then
-         -- stream test
-         epReqAck                         <= '0';
-         epReqErr                         <= '0';
-         if ( r.tst = 0 ) then
-            epReqAck <= '1';
-         end if;
-         v.tst := r.tst - 1;
+         -- stream test (ReqAck, ReqErr ignored in streaming mode)
       end if;
 
       case ( r.state ) is

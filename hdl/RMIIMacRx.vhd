@@ -24,6 +24,7 @@ entity RMIIMacRx is
       -- address **in LE format**, i.e., first octet on wire is [7:0]
       macAddr    : in  EthMacAddrType;
       promisc    : in  std_logic := '1';
+      allmulti   : in  std_logic := '1';
       mcFilter   : in  EthMulticastFilterType := ETH_MULTICAST_FILTER_INIT_C;
 
       -- misc
@@ -71,7 +72,7 @@ architecture rtl of RMIIMacRx is
    signal rin   : RegType;
 begin
 
-   P_COMB : process (r, rxRdy, rmiiDat, rmiiDV, macAddr, promisc, mcFilter, speed10, stripCRC ) is
+   P_COMB : process (r, rxRdy, rmiiDat, rmiiDV, macAddr, promisc, allmulti, mcFilter, speed10, stripCRC ) is
       variable v          : RegType;
    begin
 
@@ -134,7 +135,7 @@ begin
                        or r.isBcst
                        or r.isUcst
                        -- delayReg holds the multicast/broadcast bit
-                       or (not r.isBcst and ( (r.delayReg(0) and mcFilter( to_integer( r.mcHash )) ) = '1' ) )
+                       or (not r.isBcst and ( (r.delayReg(0) and (allmulti or mcFilter( to_integer( r.mcHash ))) ) = '1' ) )
                      ) then
                      rxVld   <= '1';
                      v.state := RECEIVE;

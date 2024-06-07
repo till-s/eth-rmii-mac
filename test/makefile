@@ -29,9 +29,9 @@ RMIIMacRx.o: RMIIMacPkg.o
 
 EthMDIOTb.o: EthMDIO.o
 
-Usb2Ep0MDIOCtlTb.o: Usb2Ep0MDIOCtl.o
+Usb2Ep0MDIOCtlTb.o: RMIIMacPkg.o Usb2Ep0MDIOCtl.o Usb2EpGenericCtlPkg.o
 
-Usb2Ep0MDIOCtl.o: EthMDIO.o Usb2UtilPkg.o Usb2Pkg.o Usb2EpGenericCtlPkg.o Usb2EpGenericCtl.o
+Usb2Ep0MDIOCtl.o: EthMDIO.o Usb2UtilPkg.o Usb2Pkg.o Usb2EpGenericCtlPkg.o Usb2EpGenericCtl.o RMIIMacPkg.o
 
 Usb2Pkg.o: Usb2UtilPkg.o
 

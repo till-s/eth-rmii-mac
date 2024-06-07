@@ -26,7 +26,7 @@ package RMIIMacPkg is
 
    function ethMultiCastHash(
       constant h : in EthMultiCastHashType;
-      constant x : in std_logic_vector(1 downto 0)
+      constant x : in std_logic_vector
    ) return EthMulticastHashType;
 
    constant SLOT_BIT_TIME_C       : natural := 512;
@@ -41,6 +41,7 @@ package RMIIMacPkg is
    subtype EthMulticastFilterType is std_logic_vector( 2**EthMulticastHashType'length - 1 downto 0);
 
    constant ETH_MULTICAST_FILTER_INIT_C : EthMulticastFilterType := ( others => '0' );
+   constant ETH_MULTICAST_FILTER_ALL_C  : EthMulticastFilterType := ( others => '1' );
 
 end package RMIIMacPkg;
 
@@ -55,7 +56,7 @@ package body RMIIMacPkg is
       variable s : boolean;
    begin
       v          := (others => '0');
-      v(x'range) := (x xor c(x'range));
+      v(x'length - 1 downto 0) := (x xor c(x'length - 1 downto 0));
       for i in 1 to x'length loop
          s := (v(0) = '1');
          v := '0' & v(v'left downto 1);
@@ -78,11 +79,17 @@ package body RMIIMacPkg is
 
    function ethMultiCastHash(
       constant h : in EthMultiCastHashType;
-      constant x : in std_logic_vector(1 downto 0)
+      constant x : in std_logic_vector
    ) return EthMulticastHashType is
       variable v : std_logic_vector( EthMulticastHashType'range );
    begin
-      v := crcLETbl( std_logic_vector( h ), x, std_logic_vector( ETH_MULTICAST_HASH_POLY_C ) );
+      if ( h'length >= x'length ) then
+         v := crcLETbl( std_logic_vector( h ), x, std_logic_vector( ETH_MULTICAST_HASH_POLY_C ) );
+      else
+         -- works until x'length > 2* h'length
+         v := crcLETbl( std_logic_vector( h ), x(h'range), std_logic_vector( ETH_MULTICAST_HASH_POLY_C ) );
+         v := crcLETbl( v, x(x'left downto h'length), std_logic_vector( ETH_MULTICAST_HASH_POLY_C ) );
+      end if;
       return EthMulticastHashType( v );
    end function ethMulticastHash;
 

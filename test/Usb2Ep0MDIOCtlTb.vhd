@@ -4,6 +4,8 @@ use     ieee.numeric_std.all;
 
 use     work.Usb2UtilPkg.all;
 use     work.Usb2Pkg.all;
+use     work.Usb2EpGenericCtlPkg.all;
+use     work.RMIIMacPkg.all;
 
 entity Usb2Ep0MDIOCtlTb is
 end entity Usb2Ep0MDIOCtlTb;
@@ -16,20 +18,20 @@ architecture sim of Usb2Ep0MDIOCtlTb is
    signal mdioDatOut     : std_logic;
    signal mdioDatInp     : std_logic;
    signal mdioDatHiZ     : std_logic;
-   signal running        : boolean := true;
 
    signal sreg           : std_logic_vector(31 downto 0) := (others => '1');
    signal nbits          : integer := -1;
    signal ncycles        : integer := 0;
    signal nreqs          : integer := 0;
    signal nwrite         : integer := 0;
+   signal nstrm          : integer := 0;
    signal match          : boolean := true;
 
    signal tstReqVld      : std_logic_vector(0 to 3) := (others => '0');
    signal tstReqAck      : std_logic;
    signal tstReqErr      : std_logic;
-   signal tstParamIb     : Usb2ByteArray(0 to 7);
-   signal tstParamOb     : Usb2ByteArray(0 to 7);
+   signal tstParamIb     : Usb2ByteArray(0 to 3);
+   signal tstParamOb     : Usb2ByteArray(0 to 3);
    signal simReqParam    : Usb2CtlReqParamType := USB2_CTL_REQ_PARAM_INIT_C;
    signal status         : std_logic_vector(15 downto 0);
 
@@ -37,11 +39,32 @@ architecture sim of Usb2Ep0MDIOCtlTb is
    signal regB           : std_logic_vector(15 downto 0) := x"3210";
 
    signal rand           : natural := 0;
+
+   constant tstVec       : Usb2ByteArray := (
+      x"02",
+      x"03",
+      x"04",
+      x"05",
+      x"06",
+      x"07",
+      x"a2",
+      x"a3",
+      x"a4",
+      x"a5",
+      x"a6",
+      x"a7"
+   );
+
+   -- computed with python script
+   constant tstHashCmp  : EthMulticastFilterType := (14 => '1', 42 => '1', others => '0');
+   signal   mcFilter    : EthMulticastFilterType;
+   signal   mcFilterUpd : std_logic;
+
 begin
 
    process is
    begin
-      if ( ncycles > 3 and nreqs > 20 and nwrite > 4 ) then
+      if ( ncycles > 3 and nreqs > 20 and nwrite > 4 and nstrm > 4 ) then
          report "Test PASSED";
          wait;
       else
@@ -53,6 +76,7 @@ begin
    process (clk) is
       variable cmp : std_logic_vector(15 downto 0);
       variable val : unsigned(15 downto 0) := unsigned( regA );
+      variable idx : integer := 0;
    begin
       if ( rising_edge( clk ) ) then
          if ( ncycles > 1 ) then
@@ -72,6 +96,25 @@ begin
                val               := val + x"0101";
                tstParamOb(1)     <= std_logic_vector( val(15 downto 8) );
                tstParamOb(0)     <= std_logic_vector( val( 7 downto 0) );
+            elsif ( rand mod 7 = 0 ) then
+               tstReqVld(3)      <= '1';
+               -- stream
+               tstParamOb(1)     <= x"00";
+               tstParamOb(USB2_EP_GENERIC_STRM_DAT_IDX_C) <= tstVec(0);
+               idx               := 1;
+            end if;
+         elsif ( tstReqVld(3) = '1' ) then
+            -- stream
+            tstParamOb(USB2_EP_GENERIC_STRM_DAT_IDX_C) <= tstVec(idx);
+            if ( idx = tstVec'high ) then
+               tstParamOb(USB2_EP_GENERIC_STRM_LST_IDX_C)
+                         (USB2_EP_GENERIC_STRM_LST_BIT_C) <= '1';
+            else
+               idx := idx + 1; 
+            end if;
+            if ( tstParamOb(USB2_EP_GENERIC_STRM_LST_IDX_C)
+                         (USB2_EP_GENERIC_STRM_LST_BIT_C)  = '1' ) then
+               tstReqVld(3) <= '0';
             end if;
          elsif ( tstReqAck = '1' ) then
             tstReqVld  <= (others => '0');
@@ -91,6 +134,10 @@ begin
             else
                nwrite <= nwrite + 1;
             end if;
+         end if;
+         if ( mcFilterUpd = '1' ) then
+            assert mcFilter = tstHashCmp report "MC filter mismatch" severity failure;
+            nstrm <= nstrm + 1;
          end if;
       end if;
    end process;
@@ -175,6 +222,8 @@ begin
          speed10           => open, -- out std_logic := '0';
          duplexFull        => open, -- out std_logic := '0';
          linkOk            => open, -- out std_logic := '1';
+         mcFilter          => mcFilter,
+         mcFilterUpd       => mcFilterUpd,
          -- full contents; above bits are for convenience
          statusRegPolled   => status,
          dbgReqVld         => tstReqVld,

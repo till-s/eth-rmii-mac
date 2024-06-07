@@ -5,6 +5,7 @@ use     ieee.numeric_std.all;
 use     work.Usb2UtilPkg.all;
 use     work.Usb2Pkg.all;
 use     work.Usb2EpGenericCtlPkg.all;
+use     work.RMIIMacPkg.all;
 
 entity Usb2Ep0MDIOCtl is
    generic (
@@ -16,6 +17,7 @@ entity Usb2Ep0MDIOCtl is
       MDC_PRESCALER_G   : positive;
       NO_PREAMBLE_G     : boolean := false;
       PHY_ID_G          : natural := 1;
+      SUPPORT_MC_FILT_G : boolean := true;
       -- simulate w/o actual USB stuff
       SIMULATE_G        : boolean := false
    );
@@ -39,12 +41,14 @@ entity Usb2Ep0MDIOCtl is
       linkOk            : out std_logic := '1';
       -- full contents; above bits are for convenience
       statusRegPolled   : out std_logic_vector(15 downto 0);
+      mcFilter          : out EthMulticastFilterType := ETH_MULTICAST_FILTER_ALL_C;
+      mcFilterUpd       : out std_logic              := '0';
 
       dbgReqVld         : in  std_logic_vector( 0 to 3 ) := (others => '0');
       dbgReqAck         : out std_logic := '1';
       dbgReqErr         : out std_logic := '1';
-      dbgParamIb        : out Usb2ByteArray( 0 to 7 ) := (others => (others => '0'));
-      dbgParamOb        : in  Usb2ByteArray( 0 to 7 ) := (others => (others => '0'))
+      dbgParamIb        : out Usb2ByteArray( 0 to 3 ) := (others => (others => '0'));
+      dbgParamOb        : in  Usb2ByteArray( 0 to 3 ) := (others => (others => '0'))
 
    );
 end entity Usb2Ep0MDIOCtl;
@@ -52,35 +56,52 @@ end entity Usb2Ep0MDIOCtl;
 architecture rtl of Usb2Ep0MDIOCtl is
    constant USB2_REQ_VENDOR_GET_VERSION_C : Usb2CtlRequestCodeType := x"00";
    constant USB2_REQ_VENDOR_MDIO_C        : Usb2CtlRequestCodeType := x"01";
-   constant USB2_REQ_VENDOR_STRM_TST_C    : Usb2CtlRequestCodeType := x"02";
+   constant USB2_REQ_VENDOR_SET_MC_FILT_C : Usb2CtlRequestCodeType := x"02";
 
    constant PHY_STATUS_REG_C              : std_logic_vector(4 downto 0) := "10000";
 
-   constant CTL_REQS_C                    : Usb2EpGenericReqDefArray := (
-      usb2MkEpGeneriqReqDef(
+   constant BASIC_REQS_C                  : Usb2EpGenericReqDefArray := (
+      0 => usb2MkEpGenericReqDef(
          dev2Host => '1',
          request  =>  USB2_REQ_VENDOR_GET_VERSION_C,
          dataSize =>  4
       ),
-      usb2MkEpGeneriqReqDef(
+      1 => usb2MkEpGenericReqDef(
          dev2Host => '1',
          request  =>  USB2_REQ_VENDOR_MDIO_C,
          dataSize =>  2
       ),
-      usb2MkEpGeneriqReqDef(
+      2 => usb2MkEpGenericReqDef(
          dev2Host => '0',
          request  =>  USB2_REQ_VENDOR_MDIO_C,
          dataSize =>  2
-      ),
-      usb2MkEpGeneriqReqDef(
+      )
+   );
+
+   constant MC_REQ_C : Usb2EpGenericReqDefArray := (
+      0 => usb2MkEpGenericReqDef(
          dev2Host => '0',
-         request  =>  USB2_REQ_VENDOR_STRM_TST_C,
+         request  =>  USB2_REQ_VENDOR_SET_MC_FILT_C,
          dataSize =>  0,
          stream   =>  true
       )
    );
 
+   constant CTL_REQS_C   : Usb2EpGenericReqDefArray :=
+      concat( BASIC_REQS_C, ite( SUPPORT_MC_FILT_G, MC_REQ_C ) );
+
+   constant MC_INIT_C    : EthMulticastFilterType   :=
+      ite( SUPPORT_MC_FILT_G, ETH_MULTICAST_FILTER_INIT_C, ETH_MULTICAST_FILTER_ALL_C );
+
+
    type StateType is ( IDLE, BUSY, POLL );
+
+   subtype McCntType is signed(4 downto 0);
+
+   function toMcCnt(constant x : integer) return McCntType is
+   begin
+      return to_signed( x - 2, McCntType'length );
+   end function toMcCnt;
 
    type RegType is record
       state      : StateType;
@@ -91,6 +112,10 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlwDat    : std_logic_vector(15 downto 0);
       poll       : integer range -1 to POLL_STATUS_PER_G - 2;
       pollVal    : std_logic_vector(15 downto 0);
+      mcLst      : std_logic;
+      mcCnt      : McCntType;
+      mcFilter   : EthMulticastFilterType;
+      mcUpd      : std_logic;
    end record RegType;
 
    constant REG_INIT_C : RegType := (
@@ -101,7 +126,11 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlRegAddr => (others => '0'),
       ctlwDat    => (others => '1'),
       poll       => -1,
-      pollVal    => (others => '0')
+      pollVal    => (others => '0'),
+      mcLst      => '1',
+      mcCnt      => (others => '0'),
+      mcFilter   => MC_INIT_C,
+      mcUpd      => '0'
    );
 
    signal r                : RegType   := REG_INIT_C;
@@ -117,6 +146,10 @@ architecture rtl of Usb2Ep0MDIOCtl is
    signal ctlAck           : std_logic;
    signal ctlErr           : std_logic;
    signal ctlRDat          : std_logic_vector(15 downto 0);
+
+   signal mcHash           : EthMulticastHashType := ETH_MULTICAST_HASH_INIT_C;
+   signal mcHashIn         : EthMulticastHashType;
+   signal mcHashCen        : std_logic;
 
 begin
 
@@ -199,13 +232,36 @@ begin
          rDat          => ctlRDat
       );
 
-   P_COMB : process ( r, usb2CtlReqParam, epReqVld, paramOb, ctlAck, ctlErr, ctlRDat ) is
+   G_HASH : if ( SUPPORT_MC_FILT_G ) generate
+
+      P_HASH : process ( usb2Clk ) is
+      begin
+         if ( rising_edge( usb2Clk ) ) then
+            if ( usb2Rst = '1' ) then
+               mcHash <= ETH_MULTICAST_HASH_INIT_C;
+            elsif ( mcHashCen = '1' ) then
+               mcHash <= ethMulticastHash( mcHashIn, usb2EpGenericStrmDat( paramOb ) );
+            end if;
+         end if;
+      end process P_HASH;
+
+   end generate G_HASH;
+
+   P_COMB : process ( r, usb2CtlReqParam, epReqVld, paramOb, ctlAck, ctlErr, ctlRDat, mcHash ) is
       variable v : RegType;
    begin
       v        := r;
 
-      epReqAck <= '1';
-      epReqErr <= '1';
+      epReqAck  <= '1';
+      epReqErr  <= '1';
+      mcHashCen <= '0';
+      if ( ( r.mcLst = '1' ) or ( r.mcCnt < 0 ) ) then
+         mcHashIn  <= ETH_MULTICAST_HASH_INIT_C;
+      else
+         mcHashIn  <= mcHash;
+      end if;
+
+      v.mcUpd  := '0';
 
       paramIb                <= (others => (others => '0'));
       paramIb(0)             <= CMD_SET_VERSION_G( 7 downto  0);
@@ -218,11 +274,30 @@ begin
          paramIb(1)             <= ctlRDat(15 downto 8);
       end if;
 
+      if ( SUPPORT_MC_FILT_G ) then
+         -- do this regardless of epReqVld; mops up the last stream byte
+         if ( r.mcCnt < 0 ) then
+            v.mcCnt                              := toMcCnt( 6 );
+            v.mcFilter( to_integer( mcHash ) )   := '1';
+            v.mcUpd                              := r.mcLst;
+         end if;
+      end if;
+
       if    ( epReqVld( 0 ) = '1' ) then
          epReqAck                         <= '1';
          epReqErr                         <= '0';
-      elsif ( epReqVld( 3 ) = '1' ) then
-         -- stream test (ReqAck, ReqErr ignored in streaming mode)
+      elsif ( SUPPORT_MC_FILT_G and (epReqVld( 3 ) = '1') ) then
+         v.mcLst   := usb2EpGenericStrmLst( paramOb );
+         mcHashCen <= '1';
+         if ( r.mcLst = '1' ) then
+            -- new request; clear filters
+            v.mcFilter := ETH_MULTICAST_FILTER_INIT_C;
+         end if;
+         if ( ( r.mcLst = '1' ) or ( r.mcCnt < 0 ) ) then
+            v.mcCnt  := toMcCnt( 6 );
+         else
+            v.mcCnt  := r.mcCnt - 1;
+         end if;
       end if;
 
       case ( r.state ) is
@@ -301,6 +376,8 @@ begin
    speed10         <= r.pollVal(1);
    duplexFull      <= r.pollVal(2);
    statusRegPolled <= r.pollVal;
+   mcFilter        <= r.mcFilter;
+   mcFilterUpd     <= r.mcUpd;
       
 end architecture rtl;
 

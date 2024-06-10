@@ -43,6 +43,46 @@ package RMIIMacPkg is
    constant ETH_MULTICAST_FILTER_INIT_C : EthMulticastFilterType := ( others => '0' );
    constant ETH_MULTICAST_FILTER_ALL_C  : EthMulticastFilterType := ( others => '1' );
 
+   type RMIIMacStrmType is record
+      dat                 : std_logic_vector(7 downto 0);
+      vld                 : std_logic;
+      lst                 : std_logic;
+   end record RMIIMacStrmType;
+
+   constant RMII_MAC_STRM_INIT_C : RMIIMacStrmType := (
+      dat                 => (others => '0'),
+      vld                 => '0',
+      lst                 => '0'
+   );
+
+   type RMIIMacCtrlType is record
+      macAddr             :  EthMacAddrType;
+      promisc             :  std_logic;
+      allmulti            :  std_logic;
+      mcFilter            :  EthMulticastFilterType;
+      speed10             :  std_logic;
+      -- shall RX strip CRC
+      stripCRC            :  std_logic;
+      -- shall TX pad and append CRC
+      appendCRC           :  std_logic;
+      collision           :  std_logic;
+      linkOK              :  std_logic;
+   end record RMIIMacCtrlType;
+
+   constant RMII_MAC_CTRL_INIT_C : RMIIMacCtrlType := (
+      macAddr             => (others => '0'),
+      promisc             => '1',
+      allmulti            => '1',
+      mcFilter            => ETH_MULTICAST_FILTER_INIT_C,
+      speed10             => '0',
+      -- shall RX strip CRC
+      stripCRC            => '1',
+      -- shall TX pad and append CRC
+      appendCRC           => '1',
+      collision           => '0',
+      linkOK              => '1'
+   );
+
 end package RMIIMacPkg;
 
 package body RMIIMacPkg is

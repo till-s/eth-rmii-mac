@@ -45,29 +45,31 @@ architecture rtl of RMIIMacTx is
    type StateType is (IDLE, PREAMBLE, SEND, PAD, CRC);
 
    type RegType is record
-      state     : StateType;
-      timer     : TimerType;
-      presc     : signed(4 downto 0);
-      phase     : unsigned(1 downto 0);
-      txEn      : std_logic;
-      crc       : std_logic_vector(31 downto 0);
-      boffRand  : BoffType;
-      boffMsk   : BoffType;
-      lstColl   : std_logic;
-      appendCRC : std_logic;
+      state      : StateType;
+      timer      : TimerType;
+      presc      : signed(4 downto 0);
+      phase      : unsigned(1 downto 0);
+      txEn       : std_logic;
+      crc        : std_logic_vector(31 downto 0);
+      boffRand   : BoffType;
+      boffMsk    : BoffType;
+      lstColl    : std_logic;
+      appendCRC  : std_logic;
+      duplexFull : std_logic;
    end record RegType;
 
    constant REG_INIT_C : RegType := (
-      state     => IDLE,
-      timer     => TIMER_OFF_C,
-      presc     => (others => '1'),
-      phase     => (others => '0'),
-      txEn      => '0',
-      crc       => ETH_CRC_INIT_LE_C,
-      boffRand  => (others => '0'),
-      boffMsk   => (others => '0'),
-      lstColl   => '0',
-      appendCRC => '0'
+      state      => IDLE,
+      timer      => TIMER_OFF_C,
+      presc      => (others => '1'),
+      phase      => (others => '0'),
+      txEn       => '0',
+      crc        => ETH_CRC_INIT_LE_C,
+      boffRand   => (others => '0'),
+      boffMsk    => (others => '0'),
+      lstColl    => '0',
+      appendCRC  => '0',
+      duplexFull => '1'
    );
 
    signal r     : RegType := REG_INIT_C;

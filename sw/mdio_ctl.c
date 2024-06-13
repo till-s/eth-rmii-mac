@@ -37,7 +37,7 @@
 struct handle {
 	libusb_device_handle *devh;
 	unsigned              ifc;
-	unsigned              phy;
+	int                   phy;
 };
 
 static void
@@ -47,6 +47,152 @@ handle_init(struct handle *h)
 	h->ifc  = -1;
 	h->phy  = PHY_IDX;
 }
+
+typedef int (*ParseArg)(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp);
+
+struct cmd_map {
+	int       cmd;
+	uint8_t   req;
+	uint8_t   ep;
+    int       val;
+	ParseArg  prs;
+};
+
+static int scanBytes(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
+{
+int ncom = 0;
+const char *p;
+char       *e;
+unsigned long v;
+size_t        l;
+uint8_t      *b = 0;
+int          st = -1;
+
+	for ( p = arg; (p=strchr(p, ',')); p++ ) {
+		ncom++;
+	}
+	if ( ! (b = malloc( ncom + 1 ) ) ) {
+		return -1;
+	}
+	l     = ncom + 1;
+	p     = arg;
+    ncom  = 0;
+	do {
+		v = strtoul( p, &e, 0 );
+		if ( e == p ) {
+			fprintf(stderr, "unable to scan number.\n");
+			goto bail;		
+		}
+		if ( *e == ',' || *e == '\0' ) {
+			if ( ncom < l ) {
+				b[ncom] = v;
+				ncom++;
+			} else {
+				fprintf(stderr, "unable to scan arg; unexpected number of values.\n");
+				goto bail;		
+			}
+		} else {
+			fprintf(stderr, "unable to scan arg; unexpected separator (not ',')\n");
+			goto bail;		
+		}
+		p = e + 1;
+	} while ( *e != '\0' );
+
+	*bufp = b;
+	*lenp = l;
+	b     = 0;
+		
+bail:
+	free( b );
+	return st;
+}
+
+static int scanMC(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
+{
+	int got = scanBytes(arg, valp, bufp, lenp);
+	if ( got ) {
+		return got;
+	}
+	*valp = ((*lenp) + 5)/6;
+	return 0;
+}
+
+static int scanVal(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
+{
+	int got = scanBytes(arg, valp, bufp, lenp);
+	if ( got ) {
+		return got;
+	}
+	if ( *lenp < 1 ) {
+		return -1;
+	}
+	*valp = (*bufp)[0];
+	free( *bufp );
+	*lenp = 0;
+	*bufp = 0;
+	return 0;
+}
+
+static struct cmd_map cmdList[] = {
+	{ cmd: 'M', req: USB_CDC_SET_ETHERNET_MULTICAST_FILTERS, ep : LIBUSB_ENDPOINT_OUT, val: 0, prs: scanMC  },
+	{ cmd: 'f', req: USB_CDC_SET_ETHERNET_PACKET_FILTER,     ep : LIBUSB_ENDPOINT_OUT, val: 0, prs: scanVal },
+};
+
+static int
+clazz_cmd(struct handle *h, int cmdCod, const char *arg)
+{
+	int i;
+	uint8_t *bufp  = 0;
+	size_t   bufsz = 0;
+	uint16_t val   = 0;
+	int st = -1;
+
+	for ( i = 0; i < sizeof(cmdList)/sizeof(cmdList[0]); i++ ) {
+		if ( cmdList[i].cmd == cmdCod ) {
+			val = cmdList[i].val;
+			if ( arg && cmdList[i].prs ) {
+				st = cmdList[i].prs( arg, &val, &bufp, &bufsz );
+				if ( st ) {
+					fprintf(stderr, "Unable to parse argument to -%c\n", cmdCod);
+					break;
+				}
+			}
+    
+			st = libusb_control_transfer(
+				h->devh,
+				( cmdList[i].ep | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_INTERFACE ),
+		        cmdList[i].req,
+				val,
+				h->ifc,
+				bufp,
+				bufsz,
+				1000
+			);
+			break;
+		}
+	}
+	free( bufp );
+	return st;
+}
+
+/*
+#define USB_CDC_SET_ETHERNET_MULTICAST_FILTERS	0x40
+#define USB_CDC_SET_ETHERNET_PM_PATTERN_FILTER	0x41
+#define USB_CDC_GET_ETHERNET_PM_PATTERN_FILTER	0x42
+#define USB_CDC_SET_ETHERNET_PACKET_FILTER	0x43
+#define USB_CDC_GET_ETHERNET_STATISTIC		0x44
+#define USB_CDC_GET_NTB_PARAMETERS		0x80
+#define USB_CDC_GET_NET_ADDRESS			0x81
+#define USB_CDC_SET_NET_ADDRESS			0x82
+#define USB_CDC_GET_NTB_FORMAT			0x83
+#define USB_CDC_SET_NTB_FORMAT			0x84
+#define USB_CDC_GET_NTB_INPUT_SIZE		0x85
+#define USB_CDC_SET_NTB_INPUT_SIZE		0x86
+#define USB_CDC_GET_MAX_DATAGRAM_SIZE		0x87
+#define USB_CDC_SET_MAX_DATAGRAM_SIZE		0x88
+#define USB_CDC_GET_CRC_MODE			0x89
+#define USB_CDC_SET_CRC_MODE			0x8a
+*/
 
 static int read_vend_cmd(struct handle *h, uint8_t req, uint16_t val, uint8_t *buf, size_t len)
 {
@@ -80,7 +226,7 @@ static int mdio_read(struct handle *h, uint8_t reg_off, uint16_t *pv)
 {
 	uint8_t buf[sizeof(*pv)];
 	int     st;
-	if ( (st = read_vend_cmd(h, VENDOR_CMD_MDIO_RW, (h->phy << 8 ) | (reg_off & 0x1f), buf, sizeof(buf) )) < st ) {
+	if ( (st = read_vend_cmd(h, VENDOR_CMD_MDIO_RW, (h->phy << 8 ) | (reg_off & 0x1f), buf, sizeof(buf) )) < sizeof(buf) ) {
 		if ( st >= 0 ) {
 			st = -1;
 		}
@@ -96,7 +242,7 @@ static int mdio_write(struct handle *h, uint8_t reg_off, uint16_t v)
 	int     st;
 	buf[0] =  v & 0xff;
 	buf[1] = (v >> 8);
-	if ( (st = write_vend_cmd(h, VENDOR_CMD_MDIO_RW, (h->phy <<8 ) | (reg_off & 0x1f), buf, sizeof(buf) )) < st ) {
+	if ( (st = write_vend_cmd(h, VENDOR_CMD_MDIO_RW, (h->phy <<8 ) | (reg_off & 0x1f), buf, sizeof(buf) )) < sizeof(buf) ) {
 		if ( st >= 0 ) {
 			st = -1;
 		}
@@ -105,22 +251,21 @@ static int mdio_write(struct handle *h, uint8_t reg_off, uint16_t v)
 	return 0;
 }
 
-
-
 static void usage(const char *nm, int lvl)
 {
 	printf("usage: %s [-l <bufsz>] [-P <idProduct>] [-h] %s [reg[=val]],...\n", nm, (lvl > 0 ? "[-V <idVendor>] [-i <phy_index>] [-s <stream_len>]" : "") );
     printf("Testing USB DCDAcm Example Using libusb\n");
-    printf("  -h           : this message (repeated -h increases verbosity of help)\n");
-    printf("  -l <bufsz>   : set buffer size (default = max)\n");
-    printf("  -P<idProduct>: use product ID <idProduct> (default: 0x%04x)\n", ID_PROD);
+    printf("  -h                 : this message (repeated -h increases verbosity of help)\n");
+    printf("  -l <bufsz>         : set buffer size (default = max)\n");
+    printf("  -P<idProduct>      : use product ID <idProduct> (default: 0x%04x)\n", ID_PROD);
+	printf("  -M <byte>{,<byte>} : set MC filters\n");
 	if ( lvl > 0 ) {
-    printf("  -V<idVendor> : use vendor ID <idVendor> (default: 0x%04x)\n", ID_VEND);
-    printf("  -i<phy_idx>  : phy index/address (default: %d)\n", PHY_IDX );
-    printf("  -s<strm_len> : test streaming firmware feature (default %d; 0 is off)\n", STRM_LEN);
-    printf("  -f<filter>   : set packet filter flags\n");
+    printf("  -V<idVendor>       : use vendor ID <idVendor> (default: 0x%04x)\n", ID_VEND);
+    printf("  -i<phy_idx>        : phy index/address (default: %d)\n", PHY_IDX );
+    printf("  -s<strm_len>       : test streaming firmware feature (default %d; 0 is off)\n", STRM_LEN);
+    printf("  -f<filter>         : set packet filter flags\n");
 	}
-    printf("  reg[=val]    : read/write MDIO register\n");
+    printf("  reg[=val]          : read/write MDIO register\n");
 }
 
 int
@@ -145,11 +290,11 @@ uint16_t                                         val;
 int                                              reg;
 int                                              strm_len = 0;
 uint8_t                                         *bufp = 0;
-int                                              filt = -1;
+const char                                      *optstr = "l:hV:P:i:s:f:M:";
 
 	handle_init( &hndl );
 
-	while ( (opt = getopt(argc, argv, "l:hV:P:i:s:f:")) > 0 ) {
+	while ( (opt = getopt(argc, argv, optstr )) > 0 ) {
 		i_p = 0;
 		l_p = 0;
 		switch (opt)  {
@@ -159,7 +304,8 @@ int                                              filt = -1;
             case 'P':  i_p = &pid ;        break;
 			case 'i':  i_p = &hndl.phy;    break;
 			case 's':  i_p = &strm_len;    break;
-			case 'f':  i_p = &filt;        break;
+			case 'f':                      break;
+			case 'M':                      break;
 			default:
 				fprintf(stderr, "Error: Unknown option -%c\n", opt);
                 usage( argv[0], 0 );
@@ -328,18 +474,16 @@ int                                              filt = -1;
 		}
 	}
 
-	if ( filt >= 0 ) {
-		libusb_control_transfer(
-			hndl.devh,
-			LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE,
-			USB_CDC_SET_ETHERNET_PACKET_FILTER,
-			(filt & 0x1F),
-			hndl.ifc,
-			NULL,
-			0,
-			1000
-		);
-		sleep(10);
+	optind = 0;
+	while ( (opt = getopt(argc, argv, optstr )) > 0 ) {
+		switch ( opt ) {
+			case 'M':
+			case 'f':
+				if ( clazz_cmd( &hndl, opt, optarg ) ) {
+				}
+			default:
+				break;
+		}
 	}
 
 	rv = 0;

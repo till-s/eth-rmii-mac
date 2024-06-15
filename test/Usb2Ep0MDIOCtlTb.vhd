@@ -2,6 +2,23 @@
 -- You may obtain a copy of the license at
 --   https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12
 -- This notice must not be removed.
+library ieee;
+use     ieee.std_logic_1164.all;
+use     ieee.numeric_std.all;
+use     ieee.math_real.all;
+
+use     work.Usb2UtilPkg.all;
+use     work.UlpiPkg.all;
+use     work.Usb2Pkg.all;
+
+package body Usb2AppCfgPkg is
+   function usb2AppGetDescriptors return Usb2ByteArray is
+      constant c : Usb2ByteArray := (0 => x"00");
+   begin
+      return c;
+   end function usb2AppGetDescriptors;
+end package body Usb2AppCfgPkg;
+
 
 library ieee;
 use     ieee.std_logic_1164.all;
@@ -16,6 +33,8 @@ entity Usb2Ep0MDIOCtlTb is
 end entity Usb2Ep0MDIOCtlTb;
 
 architecture sim of Usb2Ep0MDIOCtlTb is
+
+   constant NO_DESC_C    : Usb2ByteArray(0 to -1) := (others => (others => '0'));
    signal clk            : std_logic := '0';
    signal rst            : std_logic := '0';
 
@@ -257,6 +276,23 @@ begin
       end if;
    end process;
 
+   U_MC_DUT : entity work.Usb2SetMCFilter
+      generic map (
+         DESCRIPTORS_G   => NO_DESC_C,
+         SIMULATE_G      => true
+      )
+      port map (
+         clk             => clk,
+         rst             => rst,
+
+         mcFilterStrmDat => usb2EpGenericStrmDat( tstParamOb ),
+         mcFilterStrmVld => tstReqVldMskd(3),
+         mcFilterStrmDon => usb2EpGenericStrmDon( tstParamOb ),
+
+         mcFilter        => mcFilter,
+         mcFilterUpd     => mcFilterUpd
+      );
+
    U_DUT : entity work.Usb2Ep0MDIOCtl
       generic map (
          MDC_PRESCALER_G => 1,
@@ -280,11 +316,10 @@ begin
          speed10           => open, -- out std_logic := '0';
          duplexFull        => open, -- out std_logic := '0';
          linkOk            => open, -- out std_logic := '1';
-         mcFilter          => mcFilter,
-         mcFilterUpd       => mcFilterUpd,
+
          -- full contents; above bits are for convenience
          statusRegPolled   => status,
-         dbgReqVld         => tstReqVldMskd,
+         dbgReqVld         => tstReqVldMskd(0 to 2),
          dbgReqAck         => tstReqAck,
          dbgReqErr         => tstReqErr,
          dbgParamIb        => tstParamIb,

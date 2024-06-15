@@ -49,6 +49,7 @@ handle_init(struct handle *h)
 }
 
 typedef int (*ParseArg)(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp);
+typedef int (*PrintRes)(FILE       *f  , uint8_t *bufp, size_t lenp);
 
 struct cmd_map {
 	int       cmd;
@@ -56,7 +57,73 @@ struct cmd_map {
 	uint8_t   ep;
     int       val;
 	ParseArg  prs;
+	PrintRes  prp;
 };
+
+static int scanMacAddr(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
+{
+int i,ch;
+uint8_t v;
+int     mymem = (0 == (*bufp));
+
+	if ( mymem ) {
+		if ( ! (*bufp = calloc(1,6)) ) {
+			fprintf(stderr, "No Memory\n");
+			return -1;
+		}
+	} else {
+		memset( *bufp, 0, 6 );
+	}
+
+	/* if arg is NULL we just alloc a buffer for readback */
+	if ( arg ) {
+
+		for (i = 0; i<12; i++) {
+			ch = arg[i];
+			if ( ch >= '0' && ch <= '9' ) {
+				v = ch - '0';
+			} else if ( ch >= 'A' && ch <= 'F' ) {
+				v = ch - 'A' + 10;
+			} else if ( ch >= 'a' && ch <= 'f' ) {
+				v = ch - 'a' + 10;
+			} else {
+				fprintf(stderr, "Missing hex digit (12 expected)\n");
+				goto bail;
+			}
+			(*bufp)[i/2] |= v << ( i&1 ? 0 : 4 );
+		}
+
+	}
+
+	if ( lenp ) {
+		*lenp = 6;
+	}
+	return 0;
+
+bail:
+	if ( mymem ) {
+		free( *bufp );
+		*bufp = 0;
+	}
+	if ( lenp ) {
+		*lenp = 0;
+	}
+	return -1;
+}
+
+static int printMacAddr(FILE *f, uint8_t *buf, size_t len)
+{
+	if ( len < 6 ) {
+		fprintf(stderr, "Unable to print mac address -- response too short!\n");
+		return -1;
+	}
+	while ( len-- > 0 ) {
+		fprintf(f, "%02X", *buf);
+		buf++;
+	}
+	fprintf(f, "\n");
+	return 0;
+}
 
 static int scanBytes(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
 {
@@ -68,13 +135,19 @@ size_t        l;
 uint8_t      *b = 0;
 int          st = -1;
 
+	if ( ! arg || ! *arg ) {
+		*bufp = 0;
+		*lenp = 0;
+		return 0;
+	}
+
 	for ( p = arg; (p=strchr(p, ',')); p++ ) {
 		ncom++;
 	}
-	if ( ! (b = malloc( ncom + 1 ) ) ) {
+	l     = ncom + 1;
+	if ( ! (b = malloc( l ) ) ) {
 		return -1;
 	}
-	l     = ncom + 1;
 	p     = arg;
     ncom  = 0;
 	do {
@@ -101,6 +174,7 @@ int          st = -1;
 	*bufp = b;
 	*lenp = l;
 	b     = 0;
+	st    = 0;
 		
 bail:
 	free( b );
@@ -109,12 +183,63 @@ bail:
 
 static int scanMC(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
 {
-	int got = scanBytes(arg, valp, bufp, lenp);
-	if ( got ) {
-		return got;
+	int         ncom, nadr, i;
+	const char *p;
+	uint8_t    *b  = 0;
+    uint8_t     l  = 0;
+	int         rv = -1;
+	uint8_t    *m;
+
+	if ( !arg || ! *arg ) {
+		/* empty list */
+		return 0;
 	}
-	*valp = ((*lenp) + 5)/6;
-	return 0;
+
+	ncom = 0;
+	for ( p = arg; (p = strchr(p, ',')); p++ ) {
+		ncom++;
+	}
+	nadr = ncom + 1;
+
+	l    = 6*nadr;
+	if ( ! (b = malloc( l ) ) ) {
+		fprintf(stderr, "No Memory\n");
+		goto bail;
+	}
+
+	for ( i = 0, p = arg, m = b; i < nadr; i++, m += 6 ) {
+		if ( 0 != i ) {
+			if ( ',' != *p ) {
+				fprintf(stderr, "Error: comma expected\n");
+				goto bail;
+			}
+			p++;
+		}
+		if ( scanMacAddr( p, valp /* dummy */, &m, 0 ) ) {
+			fprintf(stderr, "Invalid MAC address\n");
+			goto bail;
+		}
+		p += 12;
+	}
+	
+	*valp = nadr;
+
+    *bufp = b;
+    *lenp = l;
+
+{ int i;
+	printf("scnMC val 0x%04x, buf %p, len %d\n", *valp, *bufp, *lenp);
+for ( i = 0; i < *lenp; i++ ) {
+printf("%02X,", (*bufp)[i]);
+}
+printf("\n");
+}
+    b     = 0;
+    rv    = 0;
+
+bail:
+	free( b );
+	return rv;
 }
 
 static int scanVal(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
@@ -134,12 +259,15 @@ static int scanVal(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp
 }
 
 static struct cmd_map cmdList[] = {
-	{ cmd: 'M', req: USB_CDC_SET_ETHERNET_MULTICAST_FILTERS, ep : LIBUSB_ENDPOINT_OUT, val: 0, prs: scanMC  },
-	{ cmd: 'f', req: USB_CDC_SET_ETHERNET_PACKET_FILTER,     ep : LIBUSB_ENDPOINT_OUT, val: 0, prs: scanVal },
+	{ cmd: 'M', req: USB_CDC_SET_ETHERNET_MULTICAST_FILTERS, ep : LIBUSB_ENDPOINT_OUT, val: 0, prs: scanMC     , prp:            0 },
+	{ cmd: 'f', req: USB_CDC_SET_ETHERNET_PACKET_FILTER,     ep : LIBUSB_ENDPOINT_OUT, val: 0, prs: scanVal    , prp:            0 },
+	{ cmd: 'S', req: USB_CDC_SET_NET_ADDRESS,                ep : LIBUSB_ENDPOINT_OUT, val: 0, prs: scanMacAddr, prp:            0 },
+	{ cmd: 'G', req: USB_CDC_GET_NET_ADDRESS,                ep : LIBUSB_ENDPOINT_IN , val: 0, prs: scanMacAddr, prp: printMacAddr },
+
 };
 
 static int
-clazz_cmd(struct handle *h, int cmdCod, const char *arg)
+clazz_cmd(struct handle *h, FILE *f, int cmdCod, const char *arg)
 {
 	int i;
 	uint8_t *bufp  = 0;
@@ -150,17 +278,22 @@ clazz_cmd(struct handle *h, int cmdCod, const char *arg)
 	for ( i = 0; i < sizeof(cmdList)/sizeof(cmdList[0]); i++ ) {
 		if ( cmdList[i].cmd == cmdCod ) {
 			val = cmdList[i].val;
-			if ( arg && cmdList[i].prs ) {
+
+			if ( cmdList[i].prs ) {
+				if ( cmdList[i].ep == LIBUSB_ENDPOINT_IN ) {
+					/* indicate that they should just alloc space */
+					arg = 0;
+				}
 				st = cmdList[i].prs( arg, &val, &bufp, &bufsz );
 				if ( st ) {
-					fprintf(stderr, "Unable to parse argument to -%c\n", cmdCod);
+					fprintf(stderr, "Unable to parse argument to -%c (%s)\n", cmdCod, arg);
 					break;
 				}
 			}
     
 			st = libusb_control_transfer(
 				h->devh,
-				( cmdList[i].ep | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_INTERFACE ),
+				( cmdList[i].ep | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE ),
 		        cmdList[i].req,
 				val,
 				h->ifc,
@@ -168,6 +301,10 @@ clazz_cmd(struct handle *h, int cmdCod, const char *arg)
 				bufsz,
 				1000
 			);
+
+			if ( cmdList[i].prp ) {
+				cmdList[i].prp( f, bufp, bufsz );
+			}
 			break;
 		}
 	}
@@ -253,12 +390,14 @@ static int mdio_write(struct handle *h, uint8_t reg_off, uint16_t v)
 
 static void usage(const char *nm, int lvl)
 {
-	printf("usage: %s [-l <bufsz>] [-P <idProduct>] [-h] %s [reg[=val]],...\n", nm, (lvl > 0 ? "[-V <idVendor>] [-i <phy_index>] [-s <stream_len>]" : "") );
+	printf("usage: %s [-l <bufsz>] [-P <idProduct>] [-M <bytes>] [-S <macaddr>] [-G] [-h] %s [reg[=val]],...\n", nm, (lvl > 0 ? "[-V <idVendor>] [-i <phy_index>] [-s <stream_len>] [-f <filter>]" : "") );
     printf("Testing USB DCDAcm Example Using libusb\n");
     printf("  -h                 : this message (repeated -h increases verbosity of help)\n");
     printf("  -l <bufsz>         : set buffer size (default = max)\n");
     printf("  -P<idProduct>      : use product ID <idProduct> (default: 0x%04x)\n", ID_PROD);
 	printf("  -M <byte>{,<byte>} : set MC filters\n");
+	printf("  -S <hex_eth_addr>  : set mac address\n");
+	printf("  -G                 : get mac address\n");
 	if ( lvl > 0 ) {
     printf("  -V<idVendor>       : use vendor ID <idVendor> (default: 0x%04x)\n", ID_VEND);
     printf("  -i<phy_idx>        : phy index/address (default: %d)\n", PHY_IDX );
@@ -290,7 +429,8 @@ uint16_t                                         val;
 int                                              reg;
 int                                              strm_len = 0;
 uint8_t                                         *bufp = 0;
-const char                                      *optstr = "l:hV:P:i:s:f:M:";
+const char                                      *optstr = "l:hV:P:i:s:f:M:S:G";
+int                                              defaultAction = 1;
 
 	handle_init( &hndl );
 
@@ -304,8 +444,13 @@ const char                                      *optstr = "l:hV:P:i:s:f:M:";
             case 'P':  i_p = &pid ;        break;
 			case 'i':  i_p = &hndl.phy;    break;
 			case 's':  i_p = &strm_len;    break;
-			case 'f':                      break;
-			case 'M':                      break;
+
+			case 'f': /* fall thru */
+			case 'M': /* fall thru */
+			case 'S': /* fall thru */
+			case 'G': /* fall thru */
+                defaultAction = 0;
+				break;
 			default:
 				fprintf(stderr, "Error: Unknown option -%c\n", opt);
                 usage( argv[0], 0 );
@@ -401,25 +546,26 @@ const char                                      *optstr = "l:hV:P:i:s:f:M:";
 	}
 
 	if ( argc <= optind && 0 == strm_len ) {
-
-		st = read_vend_cmd( &hndl, 0x00, 0x0000, buf, 4 );
-		if ( st < 4 ) {
-			fprintf(stderr, "Vendor request 0x00 failed: %d\n", st);
-		} else {
-			uint32_t reply = 0;
-			for ( i = st - 1; i >= 0; i-- ) {
-				reply = (reply<<8) | buf[i];
+		if ( defaultAction ) {
+			st = read_vend_cmd( &hndl, VENDOR_CMD_CMDSET_VERSION, 0x0000, buf, 4 );
+			if ( st < 4 ) {
+				fprintf(stderr, "Vendor request 0x00 failed: %d\n", st);
+			} else {
+				uint32_t reply = 0;
+				for ( i = st - 1; i >= 0; i-- ) {
+					reply = (reply<<8) | buf[i];
+				}
+				printf("Vendor request 0x00 (command-set version) reply: 0x%08x\n", reply);
 			}
-			printf("Vendor request 0x00 (command-set version) reply: 0x%08x\n", reply);
-		}
 
-		i = 0x10;
-		st = mdio_read( &hndl, i, &val );
-		if ( st ) {
-			fprintf(stderr, "mdio_read failed: %s\n", libusb_error_name( st ));
-			goto bail;
-		} else {
-			printf("MDIO read of reg 0x%02x: 0x%04x\n", i, val);
+			i = 0x10;
+			st = mdio_read( &hndl, i, &val );
+			if ( st ) {
+				fprintf(stderr, "mdio_read failed: %s\n", libusb_error_name( st ));
+				goto bail;
+			} else {
+				printf("MDIO read of reg 0x%02x: 0x%04x\n", i, val);
+			}
 		}
 
 	} else {
@@ -479,7 +625,11 @@ const char                                      *optstr = "l:hV:P:i:s:f:M:";
 		switch ( opt ) {
 			case 'M':
 			case 'f':
-				if ( clazz_cmd( &hndl, opt, optarg ) ) {
+			case 'S':
+			case 'G':
+				if ( (st = clazz_cmd( &hndl, stdout, opt, optarg )) < 0 ) {
+					fprintf(stderr, "USB control request failed (%d)\n", st);
+					goto bail;
 				}
 			default:
 				break;

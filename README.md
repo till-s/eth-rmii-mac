@@ -73,6 +73,47 @@ pick data bytes off the data port during every cycle when
 Depending on whether the control port's `stripCRC` bit is set
 or not the CRC is either stripped or passed to the user.
 
+#### RX Filtering
+
+The RX implements a simple packet filter
+
+ - always accepts broadcast
+ - always accepts unicast (the stations' own MAC address)
+ - if `promisc` is set on the control port then all packets
+   are accepted.
+ - if `allmulti` is set on the control port then all multicast
+   packets are accepted.
+ - If the bit with the index that equals the hashed destination
+   address is set in the `mcFilter` array is set (and the destination
+   address *is* a multicast address) then the packet is accepted.
+
+##### Multicast Hashing
+
+The multicast hashing algorithm is the 6-bit CRC computed over
+the destination address in little-endian order, i.e., in the
+order the bits arrive at the station. The polynomial is
+
+      110011
+
+in little-endian notation with the msbit removed. The initial
+value of the CRC is zero and no post inversion is performed.
+
+A simple python script defining the precise algorithm can be
+found in `scripts/mcHash.py`.
+
+Note that an address in the common notation
+
+      01:02:03:04:05:06
+
+would have to be converted into a proper 48-bit little-endian
+number
+
+      0x060504030201
+
+before being passed to the script. For this example the hash
+is `59` (decimal) and the RX would accept a packet with this
+destination address if it found `mcFilter(59) = '1'`.
+
 ## License
 
 The RMII Mac is released under the [European-Union Public

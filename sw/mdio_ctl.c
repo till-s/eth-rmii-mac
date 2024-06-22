@@ -227,13 +227,6 @@ static int scanMC(const char *arg, uint16_t *valp, uint8_t **bufp, size_t *lenp)
     *bufp = b;
     *lenp = l;
 
-{ int i;
-	printf("scnMC val 0x%04x, buf %p, len %d\n", *valp, *bufp, *lenp);
-for ( i = 0; i < *lenp; i++ ) {
-printf("%02X,", (*bufp)[i]);
-}
-printf("\n");
-}
     b     = 0;
     rv    = 0;
 

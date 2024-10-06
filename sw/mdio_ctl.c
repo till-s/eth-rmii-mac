@@ -384,7 +384,7 @@ static int mdio_write(struct handle *h, uint8_t reg_off, uint16_t v)
 static void usage(const char *nm, int lvl)
 {
 	printf("usage: %s [-l <bufsz>] [-P <idProduct>] [-M <bytes>] [-S <macaddr>] [-G] [-h] %s [reg[=val]],...\n", nm, (lvl > 0 ? "[-V <idVendor>] [-i <phy_index>] [-s <stream_len>] [-f <filter>]" : "") );
-    printf("Testing USB DCDAcm Example Using libusb\n");
+    printf("Testing USB Example Using libusb\n");
     printf("  -h                 : this message (repeated -h increases verbosity of help)\n");
     printf("  -l <bufsz>         : set buffer size (default = max)\n");
     printf("  -P<idProduct>      : use product ID <idProduct> (default: 0x%04x)\n", ID_PROD);

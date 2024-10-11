@@ -18,12 +18,15 @@ entity Usb2Ep0MDIOCtl is
       -- the command-set version;
       CMD_SET_VERSION_G : std_logic_vector(31 downto 0) := x"deadbeef";
       -- switch auto-polling off by setting to 0
-      POLL_STATUS_PER_G : natural := 20;
+      POLL_STATUS_PER_G : natural   := 20;
       MDC_PRESCALER_G   : positive;
-      NO_PREAMBLE_G     : boolean := false;
-      PHY_ID_G          : natural := 1;
+      NO_PREAMBLE_G     : boolean   := false;
+      PHY_ID_G          : natural   := 1;
       -- simulate w/o actual USB stuff
-      SIMULATE_G        : boolean := false
+      SIMULATE_G        : boolean   := false;
+      -- default value of 'force link status always on' flag;
+      -- can be changed by control request
+      LINK_ALWAYS_ON_G  : std_logic := '0'
    );
    port (
       usb2Clk           : in  std_logic;
@@ -42,7 +45,10 @@ entity Usb2Ep0MDIOCtl is
 
       speed10           : out std_logic := '0';
       duplexFull        : out std_logic := '0';
+      -- 'linkOk' may be forced 'on' via control request
       linkOk            : out std_logic := '1';
+      -- 'physicalLinkOk' reflects the BMCR reading
+      physicalLinkOk    : out std_logic := '1';
       -- full contents; above bits are for convenience
       statusRegPolled   : out std_logic_vector(15 downto 0);
 
@@ -58,6 +64,17 @@ end entity Usb2Ep0MDIOCtl;
 architecture rtl of Usb2Ep0MDIOCtl is
    constant USB2_REQ_VENDOR_GET_VERSION_C : Usb2CtlRequestCodeType := x"00";
    constant USB2_REQ_VENDOR_MDIO_C        : Usb2CtlRequestCodeType := x"01";
+   -- add a status register to monitor link status and add override the
+   -- link status to mimick 'always on'. This may be required by PHYs
+   -- which support control/status frames. If we let the linux driver
+   -- look at the BMCR register it will determine that the link is down
+   -- and ignore any PHY communication.
+   -- In such a case the driver must only look at this status register
+   -- and set the 'override' bit.
+   constant USB2_REQ_VENDOR_LNK_C         : Usb2CtlRequestCodeType := x"02";
+
+   constant LNK_STAT_IDX_C                : natural := 0;
+   constant LNK_STAT_FORCE_IDX_C          : natural := 1;
 
    constant PHY_STATUS_REG_C              : std_logic_vector(4 downto 0) := "10000";
 
@@ -76,6 +93,16 @@ architecture rtl of Usb2Ep0MDIOCtl is
          dev2Host => '0',
          request  =>  USB2_REQ_VENDOR_MDIO_C,
          dataSize =>  2
+      ),
+      3 => usb2MkEpGenericReqDef(
+         dev2Host => '1',
+         request  =>  USB2_REQ_VENDOR_LNK_C,
+         dataSize =>  1
+      ),
+      4 => usb2MkEpGenericReqDef(
+         dev2Host => '0',
+         request  =>  USB2_REQ_VENDOR_LNK_C,
+         dataSize =>  0
       )
    );
 
@@ -90,6 +117,7 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlwDat    : std_logic_vector(15 downto 0);
       poll       : integer range -1 to POLL_STATUS_PER_G - 2;
       pollVal    : std_logic_vector(15 downto 0);
+      linkFrcOn  : std_logic;
    end record RegType;
 
    constant REG_INIT_C : RegType := (
@@ -100,7 +128,8 @@ architecture rtl of Usb2Ep0MDIOCtl is
       ctlRegAddr => (others => '0'),
       ctlwDat    => (others => '1'),
       poll       => -1,
-      pollVal    => (others => '0')
+      pollVal    => (others => '0'),
+      linkFrcOn  => LINK_ALWAYS_ON_G
    );
 
    signal r                : RegType   := REG_INIT_C;
@@ -116,6 +145,7 @@ architecture rtl of Usb2Ep0MDIOCtl is
    signal ctlAck           : std_logic;
    signal ctlErr           : std_logic;
    signal ctlRDat          : std_logic_vector(15 downto 0);
+   signal linkOkLoc        : std_logic;
 
    function filter(
       constant vld : std_logic_vector;
@@ -209,7 +239,7 @@ begin
          rDat          => ctlRDat
       );
 
-   P_COMB : process ( r, usb2CtlReqParam, epReqVld, paramOb, ctlAck, ctlErr, ctlRDat ) is
+   P_COMB : process ( r, usb2CtlReqParam, epReqVld, paramOb, ctlAck, ctlErr, ctlRDat, linkOkLoc ) is
       variable v           : RegType;
       variable filteredReq : std_logic_vector( epReqVld'range );
    begin
@@ -229,21 +259,30 @@ begin
          epReqErr     <= '0';
       end if;
 
-      if ( filteredReq(1) = '1' ) then
-         paramIb(0)             <= ctlRDat( 7 downto 0);
-         paramIb(1)             <= ctlRDat(15 downto 8);
+      if    ( filteredReq( 1 ) = '1' ) then
+         paramIb(0)                       <= ctlRDat( 7 downto 0);
+         paramIb(1)                       <= ctlRDat(15 downto 8);
+      elsif ( filteredReq( 3 ) = '1' ) then
+         paramIb(0)                       <= (others => '0');
+         paramIb(0)(LNK_STAT_IDX_C)       <= linkOkLoc;
+         paramIb(0)(LNK_STAT_FORCE_IDX_C) <= r.linkFrcOn;
       end if;
 
-      if ( filteredReq( 1 ) = '1' ) then
+      if ( ( filteredReq( 1 ) or filteredReq( 3 ) or filteredReq( 4 ) ) = '1' ) then
+         -- requests that don't affect the state machine
+         -- can be handled here...
          epReqAck                         <= '1';
          epReqErr                         <= '0';
+         if ( filteredReq( 4 ) = '1' ) then
+            v.linkFrcOn := usb2CtlReqParam.value( LNK_STAT_FORCE_IDX_C );
+         end if;
       end if;
 
       case ( r.state ) is
 
          when IDLE =>
 
-            if ( ( filteredReq( 1 ) or filteredReq(2) ) = '1' ) then
+            if    ( ( filteredReq( 1 ) or filteredReq( 2 ) ) = '1' ) then
 
                epReqAck <= '0';
                epReqErr <= ctlErr;
@@ -260,7 +299,6 @@ begin
                      v.state  := BUSY;
                   end if;
                end if;
-
             elsif ( POLL_STATUS_PER_G > 0 ) then
                if ( r.poll < 0 ) then
                   v.poll       := POLL_STATUS_PER_G - 2;
@@ -311,10 +349,12 @@ begin
       end if;
    end process P_SEQ;
 
-   linkOK          <= r.pollVal(0);
+   linkOkLoc       <= r.pollVal(0) or r.linkFrcOn;
+
+   linkOk          <= linkOkLoc;
+   physicalLinkOk  <= r.pollVal(0);
    speed10         <= r.pollVal(1);
    duplexFull      <= r.pollVal(2);
    statusRegPolled <= r.pollVal;
       
 end architecture rtl;
-

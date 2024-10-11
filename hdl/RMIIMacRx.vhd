@@ -87,7 +87,9 @@ begin
       rxVld   <= '0';
       rxLst   <= '0';
 
-      if ( r.presc < 0 ) then
+      if ( r.presc >= 0 ) then
+         v.presc    := r.presc - 1;
+      else
 
          v.crc      := crc32LE2Bit( r.crc, rmiiDat );
          v.mcHash   := ethMulticastHash( r.mcHash, rmiiDat );

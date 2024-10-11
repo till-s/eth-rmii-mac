@@ -127,7 +127,9 @@ begin
             rmiiDatMux    := crcDatMux;
       end case;
 
-      if ( r.presc < 0 ) then
+      if ( r.presc >= 0 ) then
+         v.presc := r.presc - 1;
+      else
 
          if ( speed10 = '1' ) then
             v.presc := to_signed( 10 - 2, v.presc'length );

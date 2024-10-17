@@ -147,18 +147,6 @@ architecture rtl of Usb2Ep0MDIOCtl is
    signal ctlRDat          : std_logic_vector(15 downto 0);
    signal linkOkLoc        : std_logic;
 
-   function filter(
-      constant vld : std_logic_vector;
-      constant req : Usb2CtlReqParamType
-   ) return std_logic_vector is
-      constant Z_C : std_logic_vector(vld'range) := (others => '0');
-   begin
-      if ( (vld(0) or vld(1) or vld(2)) = '1' ) then
-         return vld;
-      end if;
-      return Z_C;
-   end function filter;
-
 begin
 
    G_SIM : if ( SIMULATE_G ) generate
@@ -248,16 +236,14 @@ begin
       epReqAck     <= '1';
       epReqErr     <= '1';
 
-      filteredReq  := filter( epReqVld, usb2CtlReqParam );
+      -- for now no filtering necessary
+      filteredReq  := epReqVld;
 
       paramIb      <= (others => (others => '0'));
       paramIb(0)   <= CMD_SET_VERSION_G( 7 downto  0);
       paramIb(1)   <= CMD_SET_VERSION_G(15 downto  8);
       paramIb(2)   <= CMD_SET_VERSION_G(23 downto 16);
       paramIb(3)   <= CMD_SET_VERSION_G(31 downto 24);
-      if ( filteredReq(0) = '1' ) then
-         epReqErr     <= '0';
-      end if;
 
       if    ( filteredReq( 1 ) = '1' ) then
          paramIb(0)                       <= ctlRDat( 7 downto 0);
@@ -268,7 +254,7 @@ begin
          paramIb(0)(LNK_STAT_FORCE_IDX_C) <= r.linkFrcOn;
       end if;
 
-      if ( ( filteredReq( 1 ) or filteredReq( 3 ) or filteredReq( 4 ) ) = '1' ) then
+      if ( (filteredReq(0) or filteredReq( 1 ) or filteredReq( 3 ) or filteredReq( 4 ) ) = '1' ) then
          -- requests that don't affect the state machine
          -- can be handled here...
          epReqAck                         <= '1';

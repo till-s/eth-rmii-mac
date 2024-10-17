@@ -32,7 +32,11 @@
 
 #define VENDOR_CMD_CMDSET_VERSION 0x00
 #define VENDOR_CMD_MDIO_RW        0x01
-#define VENDOR_CMD_STRM           0x02
+#define VENDOR_CMD_LINK_RW        0x02
+#define VENDOR_CMD_STRM           0x10
+
+#define VENDOR_CMD_LINK_STAT      (1<<0)
+#define VENDOR_CMD_LINK_FORCE     (1<<1)
 
 struct handle {
 	libusb_device_handle *devh;
@@ -386,7 +390,9 @@ static void usage(const char *nm, int lvl)
 	printf("usage: %s [-l <bufsz>] [-P <idProduct>] [-M <bytes>] [-S <macaddr>] [-G] [-h] %s [reg[=val]],...\n", nm, (lvl > 0 ? "[-V <idVendor>] [-i <phy_index>] [-s <stream_len>] [-f <filter>]" : "") );
     printf("Testing USB Example Using libusb\n");
     printf("  -h                 : this message (repeated -h increases verbosity of help)\n");
-    printf("  -l <bufsz>         : set buffer size (default = max)\n");
+    printf("  -l                 : read vendor-specific link register\n");
+    printf("  -C                 : set 'force-carrier on' flag\n");
+    printf("  -c                 : clear 'force-carrier on' flag\n");
     printf("  -P<idProduct>      : use product ID <idProduct> (default: 0x%04x)\n", ID_PROD);
 	printf("  -M <byte>{,<byte>} : set MC filters\n");
 	printf("  -S <hex_eth_addr>  : set mac address\n");
@@ -411,7 +417,6 @@ struct libusb_config_descriptor                 *cfg   = 0;
 int                                              i, got;
 unsigned char                                    buf[1024];
 int                                              opt;
-int                                              len  =  0;
 int                                             *i_p;
 int                                              vid  = ID_VEND;
 int                                              pid  = ID_PROD;
@@ -422,8 +427,10 @@ uint16_t                                         val;
 int                                              reg;
 int                                              strm_len = 0;
 uint8_t                                         *bufp = 0;
-const char                                      *optstr = "l:hV:P:i:s:f:M:S:G";
+const char                                      *optstr = "lcChV:P:i:s:f:M:S:G";
 int                                              defaultAction = 1;
+int                                              rdLinkReg = 0;
+int                                              forceCarrier = -1;
 
 	handle_init( &hndl );
 
@@ -432,7 +439,9 @@ int                                              defaultAction = 1;
 		l_p = 0;
 		switch (opt)  {
             case 'h':  help++;             break;
-			case 'l':  i_p = &len;         break;
+			case 'l':  rdLinkReg = 1;      break;
+			case 'C':  forceCarrier = 1;   break;
+			case 'c':  forceCarrier = 0;   break;
             case 'V':  i_p = &vid ;        break;
             case 'P':  i_p = &pid ;        break;
 			case 'i':  i_p = &hndl.phy;    break;
@@ -466,11 +475,6 @@ int                                              defaultAction = 1;
 
 	if ( hndl.phy > 31 ) {
 		fprintf(stderr,"Error: invalid phy idx\n");
-		goto bail;
-	}
-
-	if ( len < 0 || len > sizeof(buf) ) {
-		fprintf(stderr, "Invalid length\n");
 		goto bail;
 	}
 
@@ -538,11 +542,40 @@ int                                              defaultAction = 1;
 		goto bail;
 	}
 
+	if ( (forceCarrier >= 0) ) {
+		st = read_vend_cmd( &hndl, VENDOR_CMD_LINK_RW, 0x0000, buf, 1 );
+		if ( st < 1 ) {
+			fprintf(stderr, "Vendor read request LINK failed: %d\n", st);
+			goto bail;
+		}
+		val = buf[0];
+		if ( forceCarrier ) {
+			val |=  VENDOR_CMD_LINK_FORCE;
+		} else {
+			val &= ~VENDOR_CMD_LINK_FORCE;
+		}
+		st = write_vend_cmd(&hndl, VENDOR_CMD_LINK_RW , val, NULL, 0);
+		if ( st < 0 ) {
+			fprintf(stderr, "Vendor write request LINK failed: %d\n", st);
+			goto bail;
+		}
+	}
+
+
+	if ( rdLinkReg ) {
+		st = read_vend_cmd( &hndl, VENDOR_CMD_LINK_RW, 0x0000, buf, 1 );
+		if ( st < 1 ) {
+			fprintf(stderr, "Vendor read request LINK failed: %d\n", st);
+			goto bail;
+		}
+		printf("Vendor Link Register 0x%02x\n", buf[0]);
+	}
+
 	if ( argc <= optind && 0 == strm_len ) {
 		if ( defaultAction ) {
 			st = read_vend_cmd( &hndl, VENDOR_CMD_CMDSET_VERSION, 0x0000, buf, 4 );
 			if ( st < 4 ) {
-				fprintf(stderr, "Vendor request 0x00 failed: %d\n", st);
+				fprintf(stderr, "Vendor read request CMDSET_VERSION failed: %d\n", st);
 			} else {
 				uint32_t reply = 0;
 				for ( i = st - 1; i >= 0; i-- ) {

@@ -23,7 +23,7 @@
 #define DATA_INTF_NUMBER 1
 
 #define ID_VEND  0x1209
-#define ID_PROD  0x0001
+#define ID_PROD  0x8851
 #define PHY_IDX  1
 #define STRM_LEN 0
 

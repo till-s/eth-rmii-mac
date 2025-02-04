@@ -11,8 +11,8 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <libusb-1.0/libusb.h>
-#include <usb.h>
 #include <linux/usb/cdc.h>
 #include <getopt.h>
 #include <string.h>
@@ -521,7 +521,7 @@ int                                              forceCarrier = -1;
 		if ( cfg->interface[i].num_altsetting < 1 ) {
 			continue;
 		}
-		if (    USB_CLASS_COMM       == cfg->interface[i].altsetting[0].bInterfaceClass
+		if (    LIBUSB_CLASS_COMM       == cfg->interface[i].altsetting[0].bInterfaceClass
 		     && USB_CDC_SUBCLASS_NCM == cfg->interface[i].altsetting[0].bInterfaceSubClass ) {
 			hndl.ifc = cfg->interface[i].altsetting[0].bInterfaceNumber;
 			break;

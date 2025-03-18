@@ -9,12 +9,11 @@ use     ieee.numeric_std.all;
 
 use     work.Usb2UtilPkg.all;
 use     work.Usb2Pkg.all;
-use     work.Usb2DescPkg.all;
 use     work.RMIIMacPkg.all;
 
 entity Usb2SetMCFilter is
    generic (
-      DESCRIPTORS_G    : Usb2ByteArray;
+      ENABLE_G         : boolean := true;
       SIMULATE_G       : boolean := false
    );
    port (
@@ -57,7 +56,7 @@ architecture rtl of Usb2SetMCFilter is
 
 begin
 
-   G_RTL : if ( SIMULATE_G or usb2GetNumMCFilters( DESCRIPTORS_G, USB2_IFC_SUBCLASS_CDC_NCM_C ) > 0 ) generate
+   G_RTL : if ( SIMULATE_G or ENABLE_G ) generate
       signal r                : RegType := REG_INIT_C;
       signal rin              : RegType;
 
